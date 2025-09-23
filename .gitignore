@@ -1,0 +1,23 @@
+# Build
+build/
+.gradle/
+bin/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Minecraft
+run/
+
+# Config with API keys
+config/steve-common.toml
+run/config/steve-common.toml
+
+# Misc
+*.log
+.DS_Store
+
+# JDK
+jdk-17.0.2.jdk/
