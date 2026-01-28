@@ -13,4 +13,12 @@ public class TaskPlannerTest {
         // TODO: Add test implementation
         // Example: Test LLM integration and response parsing
     }
+
+    @Test
+    void testOllamaClientInstantiation() {
+        // Test that OllamaClient can be instantiated
+        OllamaClient client = new OllamaClient();
+        assertNotNull(client, "OllamaClient should be instantiated");
+    }
 }
+
