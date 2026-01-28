@@ -58,28 +58,29 @@ dependencies {
     // JSON parsing - Minecraft already includes Gson
 
     // GraalVM for JavaScript code execution engine
+    // Using jarJar for Forge-native dependency bundling (jar-in-jar)
     implementation 'org.graalvm.polyglot:polyglot:23.1.0'
     implementation 'org.graalvm.polyglot:js:23.1.0'
-    shadow 'org.graalvm.polyglot:polyglot:23.1.0'
-    shadow 'org.graalvm.polyglot:js:23.1.0'
+    jarJar 'org.graalvm.polyglot:polyglot:23.1.0'
+    jarJar 'org.graalvm.polyglot:js:23.1.0'
 
     // Resilience4j for fault tolerance (circuit breaker, retry, rate limiting, bulkhead)
     implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
     implementation 'io.github.resilience4j:resilience4j-retry:2.1.0'
     implementation 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
     implementation 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
-    shadow 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
-    shadow 'io.github.resilience4j:resilience4j-retry:2.1.0'
-    shadow 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
-    shadow 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
+    jarJar 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
+    jarJar 'io.github.resilience4j:resilience4j-retry:2.1.0'
+    jarJar 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
+    jarJar 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
 
     // Caffeine cache for LLM response caching
     implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
-    shadow 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+    jarJar 'com.github.ben-manes.caffeine:caffeine:3.1.8'
 
     // Apache Commons for SHA-256 hashing (cache keys)
     implementation 'commons-codec:commons-codec:1.16.0'
-    shadow 'commons-codec:commons-codec:1.16.0'
+    jarJar 'commons-codec:commons-codec:1.16.0'
 
     // JUnit 5 for testing
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.9.3'
@@ -106,25 +107,33 @@ tasks.named('jar', Jar).configure {
     exclude 'META-INF/versions/**'
 }
 
-// Configure shadow jar to merge dependencies
-shadowJar {
-    configurations = [project.configurations.shadow]
-    archiveClassifier.set('all')
-    
-    // Exclude unused Java 9+ versioned modules to reduce jar size
-    exclude 'META-INF/versions/**'
-    
-    // Relocate packages to avoid conflicts
-    relocate 'com.github.benmanes.caffeine', 'com.steve.ai.shaded.caffeine'
-    relocate 'org.apache.commons.codec', 'com.steve.ai.shaded.codec'
-    relocate 'io.github.resilience4j', 'com.steve.ai.shaded.resilience4j'
-    relocate 'org.graalvm.polyglot', 'com.steve.ai.shaded.graalvm'
-    
-    // Don't minimize - these libraries use reflection and dynamic loading
-    // minimize() can break GraalVM and Resilience4j at runtime
-
-    finalizedBy 'reobfJar'
-}
+// Shadow jar configuration - DISABLED
+// We switched from ShadowJar to jarJar for Forge-native dependency bundling.
+// jarJar integrates better with ForgeGradle and the reobfJar process,
+// embedding dependencies as jar-in-jar (META-INF/jarjar/) instead of a fat jar.
+// This resolves classloading and mapping issues with Forge 1.20.1.
+// 
+// The Shadow plugin is kept in the plugins block but unused.
+// If you want to re-enable Shadow, uncomment the block below and replace jarJar
+// declarations with shadow declarations in the dependencies block.
+// shadowJar {
+//     configurations = [project.configurations.shadow]
+//     archiveClassifier.set('all')
+//     
+//     // Exclude unused Java 9+ versioned modules to reduce jar size
+//     exclude 'META-INF/versions/**'
+//     
+//     // Relocate packages to avoid conflicts
+//     relocate 'com.github.benmanes.caffeine', 'com.steve.ai.shaded.caffeine'
+//     relocate 'org.apache.commons.codec', 'com.steve.ai.shaded.codec'
+//     relocate 'io.github.resilience4j', 'com.steve.ai.shaded.resilience4j'
+//     relocate 'org.graalvm.polyglot', 'com.steve.ai.shaded.graalvm'
+//     
+//     // Don't minimize - these libraries use reflection and dynamic loading
+//     // minimize() can break GraalVM and Resilience4j at runtime
+//
+//     finalizedBy 'reobfJar'
+// }
 
 publishing {
     publications {
