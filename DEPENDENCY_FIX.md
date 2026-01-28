@@ -22,10 +22,11 @@ Added the Shadow Gradle plugin to bundle dependencies into the mod JAR:
    - Resilience4j libraries (circuitbreaker, retry, ratelimiter, bulkhead)
    - GraalVM Polyglot libraries
 
-3. **Configured Shadow JAR Task** (lines 112-125 in build.gradle):
+3. **Configured Shadow JAR Task** (lines 113-127 in build.gradle):
    - Package relocation to avoid conflicts with other mods
-   - Minimization to include only used classes
+   - No minimization (would break reflection-based libraries)
    - Integration with reobfJar for Forge compatibility
+   - Classifier 'all' for output JAR naming
 
 ## Package Relocations
 To prevent conflicts with other mods, packages are relocated:

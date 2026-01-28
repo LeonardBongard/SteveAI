@@ -85,5 +85,5 @@ The build.gradle has ForgeGradle version `[6.0,6.2)` which doesn't exist in Mave
 ## Security Considerations
 - All dependencies are from trusted sources (Maven Central)
 - Package relocation prevents classpath pollution
-- Minimization reduces attack surface by excluding unused code
+- No minimization is used (preserves full library functionality)
 - No new security vulnerabilities introduced

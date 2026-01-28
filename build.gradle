@@ -102,17 +102,17 @@ tasks.named('jar', Jar).configure {
         ])
     }
 
-    // Exclude unused modules to reduce jar size
+    // Exclude unused Java 9+ versioned modules from non-shadowed jar
     exclude 'META-INF/versions/**'
-
-    // Don't finalize with reobfJar - let shadowJar handle that
-    // finalizedBy 'reobfJar'
 }
 
 // Configure shadow jar to merge dependencies
 shadowJar {
     configurations = [project.configurations.shadow]
     archiveClassifier.set('all')
+    
+    // Exclude unused Java 9+ versioned modules to reduce jar size
+    exclude 'META-INF/versions/**'
     
     // Relocate packages to avoid conflicts
     relocate 'com.github.benmanes.caffeine', 'com.steve.ai.shaded.caffeine'
