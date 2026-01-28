@@ -105,21 +105,23 @@ tasks.named('jar', Jar).configure {
     // Exclude unused modules to reduce jar size
     exclude 'META-INF/versions/**'
 
-    finalizedBy 'reobfJar'
+    // Don't finalize with reobfJar - let shadowJar handle that
+    // finalizedBy 'reobfJar'
 }
 
 // Configure shadow jar to merge dependencies
 shadowJar {
     configurations = [project.configurations.shadow]
-    archiveClassifier.set('')
+    archiveClassifier.set('all')
     
     // Relocate packages to avoid conflicts
     relocate 'com.github.benmanes.caffeine', 'com.steve.ai.shaded.caffeine'
     relocate 'org.apache.commons.codec', 'com.steve.ai.shaded.codec'
     relocate 'io.github.resilience4j', 'com.steve.ai.shaded.resilience4j'
+    relocate 'org.graalvm.polyglot', 'com.steve.ai.shaded.graalvm'
     
-    // Minimize to include only used classes
-    minimize()
+    // Don't minimize - these libraries use reflection and dynamic loading
+    // minimize() can break GraalVM and Resilience4j at runtime
 
     finalizedBy 'reobfJar'
 }

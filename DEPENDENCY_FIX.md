@@ -32,11 +32,16 @@ To prevent conflicts with other mods, packages are relocated:
 - `com.github.benmanes.caffeine` → `com.steve.ai.shaded.caffeine`
 - `org.apache.commons.codec` → `com.steve.ai.shaded.codec`
 - `io.github.resilience4j` → `com.steve.ai.shaded.resilience4j`
+- `org.graalvm.polyglot` → `com.steve.ai.shaded.graalvm`
+
+Note: Minimization is NOT used as these libraries rely on reflection and dynamic class loading.
 
 ## Build Instructions
 Once the ForgeGradle version issue is resolved:
 ```bash
-./gradlew shadowJar
+./gradlew clean shadowJar
+# Output will be in build/libs/steve-ai-mod-1.0.0-all.jar
+# The '-all' suffix indicates this is the shadowed JAR with bundled dependencies
 ```
 
 ## Alternative Quick Fix (Workaround)

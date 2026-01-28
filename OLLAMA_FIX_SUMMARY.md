@@ -31,13 +31,15 @@ The current build.gradle declares dependencies as `implementation`, which makes 
      * Resilience4j libraries (circuit breaker, retry, rate limiter, bulkhead)
      * GraalVM Polyglot (JavaScript execution)
 
-3. **Configured shadowJar Task** (lines 112-125):
+3. **Configured shadowJar Task** (lines 112-127):
    - **Package Relocation**: Prevents conflicts with other mods:
      * `com.github.benmanes.caffeine` → `com.steve.ai.shaded.caffeine`
      * `org.apache.commons.codec` → `com.steve.ai.shaded.codec`
      * `io.github.resilience4j` → `com.steve.ai.shaded.resilience4j`
-   - **Minimization**: Includes only classes actually used (reduces JAR size)
+     * `org.graalvm.polyglot` → `com.steve.ai.shaded.graalvm`
+   - **No Minimization**: Libraries use reflection; minimization would break them
    - **Forge Integration**: Configured to work with reobfJar
+   - **Classifier**: Output JAR will be named `steve-ai-mod-1.0.0-all.jar`
 
 ## Why This Fixes The Problem
 1. **Shadow plugin** will bundle Caffeine and other dependencies directly into steve-ai-mod.jar
@@ -49,7 +51,7 @@ The current build.gradle declares dependencies as `implementation`, which makes 
 ```bash
 ./gradlew clean
 ./gradlew shadowJar
-# Output will be in build/libs/steve-ai-mod-1.0.0.jar
+# Output: build/libs/steve-ai-mod-1.0.0-all.jar (the '-all' suffix is the shadowed JAR)
 ```
 
 ## Temporary Workaround (For Users)
@@ -68,11 +70,12 @@ The build.gradle has ForgeGradle version `[6.0,6.2)` which doesn't exist in Mave
 - Cannot be tested/fixed in current environment due to network restrictions
 
 ## Testing Plan (Once Build Works)
-1. Build mod with `./gradlew shadowJar`
-2. Verify JAR contains shaded dependencies: `jar tf build/libs/steve-ai-mod-1.0.0.jar | grep "com/steve/ai/shaded/caffeine"`
-3. Install in Minecraft 1.20.1 with Forge
-4. Test Ollama provider initialization
-5. Verify no NoClassDefFoundError occurs
+1. Build mod with `./gradlew clean shadowJar`
+2. Verify shadowed JAR is produced: `ls -lh build/libs/steve-ai-mod-1.0.0-all.jar`
+3. Verify JAR contains shaded dependencies: `jar tf build/libs/steve-ai-mod-1.0.0-all.jar | grep "com/steve/ai/shaded/caffeine"`
+4. Install the `-all.jar` file in Minecraft 1.20.1 with Forge mods folder
+5. Test Ollama provider initialization
+6. Verify no NoClassDefFoundError occurs
 
 ## Files Modified
 - `build.gradle`: Added Shadow plugin, configured shadow dependencies and shadowJar task
