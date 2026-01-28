@@ -12,6 +12,11 @@ public class SteveConfig {
     public static final ForgeConfigSpec.IntValue ACTION_TICK_DELAY;
     public static final ForgeConfigSpec.BooleanValue ENABLE_CHAT_RESPONSES;
     public static final ForgeConfigSpec.IntValue MAX_ACTIVE_STEVES;
+    
+    // Ollama configuration
+    public static final ForgeConfigSpec.ConfigValue<String> OLLAMA_BASE_URL;
+    public static final ForgeConfigSpec.ConfigValue<String> OLLAMA_MODEL;
+    public static final ForgeConfigSpec.ConfigValue<String> OLLAMA_API_KEY;
 
     static {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
@@ -19,7 +24,7 @@ public class SteveConfig {
         builder.comment("AI API Configuration").push("ai");
         
         AI_PROVIDER = builder
-            .comment("AI provider to use: 'groq' (FASTEST, FREE), 'openai', or 'gemini'")
+            .comment("AI provider to use: 'groq' (FASTEST, FREE), 'openai', 'gemini', or 'ollama'")
             .define("provider", "groq");
         
         builder.pop();
@@ -41,6 +46,22 @@ public class SteveConfig {
         TEMPERATURE = builder
             .comment("Temperature for AI responses (0.0-2.0, lower is more deterministic)")
             .defineInRange("temperature", 0.7, 0.0, 2.0);
+        
+        builder.pop();
+
+        builder.comment("Ollama Self-hosted LLM Configuration").push("ollama");
+        
+        OLLAMA_BASE_URL = builder
+            .comment("Ollama server base URL (e.g., http://127.0.0.1:11434)")
+            .define("baseUrl", "http://127.0.0.1:11434");
+        
+        OLLAMA_MODEL = builder
+            .comment("Ollama model to use (e.g., llama3.1:8b, mistral)")
+            .define("model", "llama3.1:8b");
+        
+        OLLAMA_API_KEY = builder
+            .comment("API key for Ollama (optional, only needed if using reverse proxy with auth)")
+            .define("apiKey", "");
         
         builder.pop();
 

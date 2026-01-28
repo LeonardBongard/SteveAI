@@ -18,11 +18,13 @@ public class TaskPlanner {
     private final OpenAIClient openAIClient;
     private final GeminiClient geminiClient;
     private final GroqClient groqClient;
+    private final OllamaClient ollamaClient;
 
     // NEW: Async resilient clients
     private final AsyncLLMClient asyncOpenAIClient;
     private final AsyncLLMClient asyncGroqClient;
     private final AsyncLLMClient asyncGeminiClient;
+    private final AsyncLLMClient asyncOllamaClient;
     private final LLMCache llmCache;
     private final LLMFallbackHandler fallbackHandler;
 
@@ -31,6 +33,7 @@ public class TaskPlanner {
         this.openAIClient = new OpenAIClient();
         this.geminiClient = new GeminiClient();
         this.groqClient = new GroqClient();
+        this.ollamaClient = new OllamaClient();
 
         // Initialize async infrastructure
         this.llmCache = new LLMCache();
@@ -46,11 +49,19 @@ public class TaskPlanner {
         AsyncLLMClient baseOpenAI = new AsyncOpenAIClient(apiKey, model, maxTokens, temperature);
         AsyncLLMClient baseGroq = new AsyncGroqClient(apiKey, "llama-3.1-8b-instant", 500, temperature);
         AsyncLLMClient baseGemini = new AsyncGeminiClient(apiKey, "gemini-1.5-flash", maxTokens, temperature);
+        AsyncLLMClient baseOllama = new AsyncOllamaClient(
+            SteveConfig.OLLAMA_BASE_URL.get(),
+            SteveConfig.OLLAMA_API_KEY.get(),
+            SteveConfig.OLLAMA_MODEL.get(),
+            maxTokens,
+            temperature
+        );
 
         // Wrap with resilience patterns
         this.asyncOpenAIClient = new ResilientLLMClient(baseOpenAI, llmCache, fallbackHandler);
         this.asyncGroqClient = new ResilientLLMClient(baseGroq, llmCache, fallbackHandler);
         this.asyncGeminiClient = new ResilientLLMClient(baseGemini, llmCache, fallbackHandler);
+        this.asyncOllamaClient = new ResilientLLMClient(baseOllama, llmCache, fallbackHandler);
 
         SteveMod.LOGGER.info("TaskPlanner initialized with async resilient clients");
     }
@@ -91,6 +102,7 @@ public class TaskPlanner {
             case "groq" -> groqClient.sendRequest(systemPrompt, userPrompt);
             case "gemini" -> geminiClient.sendRequest(systemPrompt, userPrompt);
             case "openai" -> openAIClient.sendRequest(systemPrompt, userPrompt);
+            case "ollama" -> ollamaClient.sendRequest(systemPrompt, userPrompt);
             default -> {
                 SteveMod.LOGGER.warn("Unknown AI provider '{}', using Groq", provider);
                 yield groqClient.sendRequest(systemPrompt, userPrompt);
@@ -179,7 +191,7 @@ public class TaskPlanner {
     /**
      * Returns the appropriate async client based on provider config.
      *
-     * @param provider Provider name ("openai", "groq", "gemini")
+     * @param provider Provider name ("openai", "groq", "gemini", "ollama")
      * @return Resilient async client
      */
     private AsyncLLMClient getAsyncClient(String provider) {
@@ -187,6 +199,7 @@ public class TaskPlanner {
             case "openai" -> asyncOpenAIClient;
             case "gemini" -> asyncGeminiClient;
             case "groq" -> asyncGroqClient;
+            case "ollama" -> asyncOllamaClient;
             default -> {
                 SteveMod.LOGGER.warn("[Async] Unknown provider '{}', using Groq", provider);
                 yield asyncGroqClient;
