@@ -268,7 +268,7 @@ apiKey = ""  # Optional, only for reverse proxy auth
 - Lower temperature (0.5-0.7) for more deterministic actions
 
 **Self-Hosted with Ollama:**
-1. Install Ollama from [ollama.ai](https://ollama.ai)
+1. Install Ollama from [ollama.com](https://ollama.com)
 2. Run `ollama pull llama3.1:8b` to download a model
 3. Set `provider = "ollama"` in config
 4. Start playing - no API key needed!
