@@ -60,26 +60,26 @@ dependencies {
     // GraalVM for JavaScript code execution engine
     implementation 'org.graalvm.polyglot:polyglot:23.1.0'
     implementation 'org.graalvm.polyglot:js:23.1.0'
-    shadow 'org.graalvm.polyglot:polyglot:23.1.0'
-    shadow 'org.graalvm.polyglot:js:23.1.0'
+    jarJar 'org.graalvm.polyglot:polyglot:23.1.0'
+    jarJar 'org.graalvm.polyglot:js:23.1.0'
 
     // Resilience4j for fault tolerance (circuit breaker, retry, rate limiting, bulkhead)
     implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
     implementation 'io.github.resilience4j:resilience4j-retry:2.1.0'
     implementation 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
     implementation 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
-    shadow 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
-    shadow 'io.github.resilience4j:resilience4j-retry:2.1.0'
-    shadow 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
-    shadow 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
+    jarJar 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
+    jarJar 'io.github.resilience4j:resilience4j-retry:2.1.0'
+    jarJar 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
+    jarJar 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
 
     // Caffeine cache for LLM response caching
     implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
-    shadow 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+    jarJar 'com.github.ben-manes.caffeine:caffeine:3.1.8'
 
     // Apache Commons for SHA-256 hashing (cache keys)
     implementation 'commons-codec:commons-codec:1.16.0'
-    shadow 'commons-codec:commons-codec:1.16.0'
+    jarJar 'commons-codec:commons-codec:1.16.0'
 
     // JUnit 5 for testing
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.9.3'
@@ -107,24 +107,25 @@ tasks.named('jar', Jar).configure {
 }
 
 // Configure shadow jar to merge dependencies
-shadowJar {
-    configurations = [project.configurations.shadow]
-    archiveClassifier.set('all')
-    
-    // Exclude unused Java 9+ versioned modules to reduce jar size
-    exclude 'META-INF/versions/**'
-    
-    // Relocate packages to avoid conflicts
-    relocate 'com.github.benmanes.caffeine', 'com.steve.ai.shaded.caffeine'
-    relocate 'org.apache.commons.codec', 'com.steve.ai.shaded.codec'
-    relocate 'io.github.resilience4j', 'com.steve.ai.shaded.resilience4j'
-    relocate 'org.graalvm.polyglot', 'com.steve.ai.shaded.graalvm'
-    
-    // Don't minimize - these libraries use reflection and dynamic loading
-    // minimize() can break GraalVM and Resilience4j at runtime
-
-    finalizedBy 'reobfJar'
-}
+// NOTE: Disabled in favor of jarJar for Forge-native dependency bundling
+// shadowJar {
+//     configurations = [project.configurations.shadow]
+//     archiveClassifier.set('all')
+//     
+//     // Exclude unused Java 9+ versioned modules to reduce jar size
+//     exclude 'META-INF/versions/**'
+//     
+//     // Relocate packages to avoid conflicts
+//     relocate 'com.github.benmanes.caffeine', 'com.steve.ai.shaded.caffeine'
+//     relocate 'org.apache.commons.codec', 'com.steve.ai.shaded.codec'
+//     relocate 'io.github.resilience4j', 'com.steve.ai.shaded.resilience4j'
+//     relocate 'org.graalvm.polyglot', 'com.steve.ai.shaded.graalvm'
+//     
+//     // Don't minimize - these libraries use reflection and dynamic loading
+//     // minimize() can break GraalVM and Resilience4j at runtime
+//
+//     finalizedBy 'reobfJar'
+// }
 
 publishing {
     publications {
