@@ -24,22 +24,30 @@ The agents aren't following predefined scripts. They're operating off natural la
 **You need:**
 - Minecraft 1.20.1 with Forge
 - Java 17
-- An OpenAI API key (or Groq/Gemini if you prefer)
+- An OpenAI API key (or Groq/Gemini if you prefer, or run Ollama locally for self-hosted LLMs)
 
 **Installation:**
 1. Download the JAR from releases
 2. Put it in your `mods` folder
 3. Launch Minecraft
 4. Copy `config/steve-common.toml.example` to `config/steve-common.toml`
-5. Add your API key to the config
+5. Add your API key to the config (or configure Ollama for self-hosted)
 
 **Config example:**
 ```toml
+[ai]
+provider = "groq"  # Options: openai, groq, gemini, ollama
+
 [openai]
 apiKey = "your-api-key-here"
 model = "gpt-3.5-turbo"
 maxTokens = 1000
 temperature = 0.7
+
+[ollama]
+baseUrl = "http://127.0.0.1:11434"
+model = "llama3.1:8b"
+apiKey = ""  # Optional, only needed for reverse proxy auth
 ```
 
 Then spawn a Steve with `/steve spawn Bob` and press K to start giving commands.
@@ -68,7 +76,7 @@ Each Steve runs an autonomous agent loop that processes natural language command
 **Core execution flow:**
 1. User input captured via GUI (press K)
 2. Task sent to TaskPlanner with conversation context
-3. LLM (Groq/OpenAI/Gemini) generates structured action plan
+3. LLM (Groq/OpenAI/Gemini/Ollama) generates structured action plan
 4. ResponseParser extracts actions from LLM response
 5. ActionExecutor processes actions through specialized action classes
 6. Actions execute tick-by-tick to avoid freezing the game
@@ -77,7 +85,7 @@ Each Steve runs an autonomous agent loop that processes natural language command
 ### Core Components
 
 **LLM Integration** (`com.steve.ai.llm`)
-- **GeminiClient, GroqClient, OpenAIClient**: Pluggable LLM providers for agent reasoning
+- **GeminiClient, GroqClient, OpenAIClient, OllamaClient**: Pluggable LLM providers for agent reasoning
 - **TaskPlanner**: Orchestrates LLM calls with context (conversation history, world state, Steve capabilities)
 - **PromptBuilder**: Constructs prompts with available actions, examples, and formatting instructions
 - **ResponseParser**: Extracts structured action sequences from LLM responses
@@ -228,8 +236,8 @@ We welcome contributions! Here's how to get started:
 Edit `config/steve-common.toml`:
 
 ```toml
-[llm]
-provider = "groq"  # Options: openai, groq, gemini
+[ai]
+provider = "groq"  # Options: openai, groq, gemini, ollama
 
 [openai]
 apiKey = "sk-..."
@@ -246,12 +254,24 @@ maxTokens = 1000
 apiKey = "AI..."
 model = "gemini-1.5-flash"
 maxTokens = 1000
+
+[ollama]
+baseUrl = "http://127.0.0.1:11434"
+model = "llama3.1:8b"
+apiKey = ""  # Optional, only for reverse proxy auth
 ```
 
 **Performance Tips:**
 - Use Groq for fastest inference (recommended for gameplay)
+- Use Ollama for self-hosted, private inference (no API costs!)
 - GPT-4 for better planning but higher latency
 - Lower temperature (0.5-0.7) for more deterministic actions
+
+**Self-Hosted with Ollama:**
+1. Install Ollama from [ollama.com](https://ollama.com)
+2. Run `ollama pull llama3.1:8b` to download a model
+3. Set `provider = "ollama"` in config
+4. Start playing - no API key needed!
 
 ## Known Issues
 
