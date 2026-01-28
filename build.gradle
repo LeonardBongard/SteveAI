@@ -58,6 +58,7 @@ dependencies {
     // JSON parsing - Minecraft already includes Gson
 
     // GraalVM for JavaScript code execution engine
+    // Using jarJar for Forge-native dependency bundling (jar-in-jar)
     implementation 'org.graalvm.polyglot:polyglot:23.1.0'
     implementation 'org.graalvm.polyglot:js:23.1.0'
     jarJar 'org.graalvm.polyglot:polyglot:23.1.0'
@@ -106,8 +107,15 @@ tasks.named('jar', Jar).configure {
     exclude 'META-INF/versions/**'
 }
 
-// Configure shadow jar to merge dependencies
-// NOTE: Disabled in favor of jarJar for Forge-native dependency bundling
+// Shadow jar configuration - DISABLED
+// We switched from ShadowJar to jarJar for Forge-native dependency bundling.
+// jarJar integrates better with ForgeGradle and the reobfJar process,
+// embedding dependencies as jar-in-jar (META-INF/jarjar/) instead of a fat jar.
+// This resolves classloading and mapping issues with Forge 1.20.1.
+// 
+// The Shadow plugin is kept in the plugins block but unused.
+// If you want to re-enable Shadow, uncomment the block below and replace jarJar
+// declarations with shadow declarations in the dependencies block.
 // shadowJar {
 //     configurations = [project.configurations.shadow]
 //     archiveClassifier.set('all')
