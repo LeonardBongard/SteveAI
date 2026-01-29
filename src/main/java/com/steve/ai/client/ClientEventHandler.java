@@ -21,6 +21,7 @@ public class ClientEventHandler {
         }
         
         if (KeyBindings.TOGGLE_GUI != null && KeyBindings.TOGGLE_GUI.consumeClick()) {
+            com.steve.ai.SteveMod.LOGGER.info("Keybinding pressed: TOGGLE_GUI");
             SteveGUI.toggle();
         }
     }

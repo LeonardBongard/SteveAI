@@ -64,6 +64,7 @@ public class SteveGUI {
         isOpen = !isOpen;
         
         Minecraft mc = Minecraft.getInstance();
+        SteveMod.LOGGER.info("SteveGUI.toggle -> isOpen={} screen={}", isOpen, mc.screen == null ? "null" : mc.screen.getClass().getSimpleName());
         
         if (isOpen) {
             initializeInputBox();
@@ -139,8 +140,15 @@ public class SteveGUI {
     }
 
     private static void renderOverlay(GuiGraphics graphics, DeltaTracker deltaTracker) {
+        renderPanel(graphics);
+    }
+
+    public static void renderPanel(GuiGraphics graphics) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
+        if (isOpen) {
+            SteveMod.LOGGER.debug("SteveGUI.renderPanel called (open)");
+        }
 
         if (isOpen && slideOffset > 0) {
             slideOffset = Math.max(0, slideOffset - ANIMATION_SPEED);
@@ -261,7 +269,7 @@ public class SteveGUI {
             inputBox.setY(inputAreaY + 25);
             inputBox.setWidth(PANEL_WIDTH - (PANEL_PADDING * 2));
             inputBox.render(graphics, (int)mc.mouseHandler.xpos(), (int)mc.mouseHandler.ypos(),
-                deltaTracker.getGameTimeDeltaPartialTick(false));
+                mc.getDeltaTracker().getGameTimeDeltaPartialTick(false));
         }
 
         graphics.drawString(mc.font, "§8Enter: Send | ↑↓: History | Scroll: Messages", 

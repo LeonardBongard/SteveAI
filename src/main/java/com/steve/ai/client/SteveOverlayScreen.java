@@ -24,8 +24,8 @@ public class SteveOverlayScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // Don't render anything - the SteveGUI renders via overlay
-        // This screen is just to capture input
+        // Render the panel here so it shows while a Screen is open
+        SteveGUI.renderPanel(graphics);
     }
 
     @Override
