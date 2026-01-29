@@ -30,15 +30,8 @@ public class SteveOverlayScreen extends Screen {
 
     @Override
     public boolean keyPressed(KeyEvent event) {
-        // K key to close
-        if (event.key() == 75 && !event.hasShiftDown() && !event.hasControlDown() && !event.hasAltDown()) { // K
-            SteveGUI.toggle();
-            if (minecraft != null) {
-                minecraft.setScreen(null);
-            }
-            return true;
-        }
-        
+        // Don't intercept K key here - let it go to the input box
+        // The GUI can be closed with ESC (handled in SteveGUI.handleKeyPress)
         return SteveGUI.handleKeyPress(event.key(), event.scancode(), event.modifiers());
     }
 

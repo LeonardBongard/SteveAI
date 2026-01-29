@@ -19,7 +19,7 @@ public class PromptBuilder {
             ACTIONS:
             - attack: {"target": "hostile"} (for any mob/monster)
             - build: {"structure": "house", "blocks": ["oak_planks", "cobblestone", "glass_pane"], "dimensions": [9, 6, 9]}
-            - mine: {"block": "iron", "quantity": 8} (resources: iron, diamond, coal, gold, copper, redstone, emerald)
+            - mine: {"block": "iron", "quantity": 8} (resources: iron, diamond, coal, gold, copper, redstone, emerald, stone, dirt, etc.)
             - follow: {"player": "NAME"}
             - pathfind: {"x": 0, "y": 0, "z": 0}
             
@@ -32,7 +32,8 @@ public class PromptBuilder {
             6. NO extra pathfind tasks unless explicitly requested
             7. Keep reasoning under 15 words
             8. COLLABORATIVE BUILDING: Multiple Steves can work on same structure simultaneously
-            9. MINING: Can mine any ore (iron, diamond, coal, etc)
+            9. MINING: Can mine any ore (iron, diamond, coal, etc) or block type
+            10. DESTROY/DEMOLISH: To destroy or tear down structures, use "mine" action with appropriate block type (e.g., {"action": "mine", "parameters": {"block": "oak_planks", "quantity": 50}} to tear down a wooden house)
             
             EXAMPLES (copy these formats exactly):
             
@@ -53,6 +54,9 @@ public class PromptBuilder {
             
             Input: "follow me"
             {"reasoning": "Player needs me", "plan": "Follow player", "tasks": [{"action": "follow", "parameters": {"player": "USE_NEARBY_PLAYER_NAME"}}]}
+            
+            Input: "destroy the house"
+            {"reasoning": "Demolishing house structure", "plan": "Mine house blocks", "tasks": [{"action": "mine", "parameters": {"block": "oak_planks", "quantity": 50}}]}
             
             CRITICAL: Output ONLY valid JSON. No markdown, no explanations, no line breaks in JSON.
             """;
