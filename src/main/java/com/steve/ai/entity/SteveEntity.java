@@ -23,6 +23,8 @@ import org.jetbrains.annotations.Nullable;
 public class SteveEntity extends PathfinderMob {
     private static final EntityDataAccessor<String> STEVE_NAME = 
         SynchedEntityData.defineId(SteveEntity.class, EntityDataSerializers.STRING);
+    private static final EntityDataAccessor<String> DEBUG_STATUS =
+        SynchedEntityData.defineId(SteveEntity.class, EntityDataSerializers.STRING);
 
     private String steveName;
     private SteveMemory memory;
@@ -61,6 +63,7 @@ public class SteveEntity extends PathfinderMob {
     protected void defineSynchedData(SynchedEntityData.Builder builder) {
         super.defineSynchedData(builder);
         builder.define(STEVE_NAME, "Steve");
+        builder.define(DEBUG_STATUS, "Idle");
     }
 
     @Override
@@ -88,6 +91,21 @@ public class SteveEntity extends PathfinderMob {
 
     public ActionExecutor getActionExecutor() {
         return this.actionExecutor;
+    }
+
+    public void setDebugStatus(String status) {
+        if (this.level().isClientSide()) return;
+        if (status == null) {
+            status = "";
+        }
+        if (status.length() > 120) {
+            status = status.substring(0, 117) + "...";
+        }
+        this.entityData.set(DEBUG_STATUS, status);
+    }
+
+    public String getDebugStatus() {
+        return this.entityData.get(DEBUG_STATUS);
     }
 
     @Override

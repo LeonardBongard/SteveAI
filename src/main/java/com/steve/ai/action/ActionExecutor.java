@@ -51,6 +51,7 @@ public class ActionExecutor {
     private final InterceptorChain interceptorChain;
     private final AgentStateMachine stateMachine;
     private final EventBus eventBus;
+    private String lastDebugStatus;
 
     public ActionExecutor(SteveEntity steve) {
         this.steve = steve;
@@ -60,6 +61,7 @@ public class ActionExecutor {
         this.idleFollowAction = null;
         this.planningFuture = null;
         this.pendingCommand = null;
+        this.lastDebugStatus = null;
 
         // Initialize plugin architecture components
         this.eventBus = new SimpleEventBus();
@@ -82,6 +84,7 @@ public class ActionExecutor {
 
         SteveMod.LOGGER.debug("ActionExecutor initialized with plugin architecture for Steve '{}'",
             steve.getSteveName());
+        updateDebugStatus("Idle");
     }
     
     private TaskPlanner getTaskPlanner() {
@@ -134,9 +137,13 @@ public class ActionExecutor {
             // Store command and start async planning
             this.pendingCommand = command;
             this.isPlanning = true;
+            updateDebugStatus("Planning: " + command);
 
             // Send immediate feedback to user
             sendToGUI(steve.getSteveName(), "Thinking...");
+            if (SteveConfig.ENABLE_CHAT_RESPONSES.get()) {
+                sendDebugToChat("Thinking about: " + command);
+            }
 
             // Start async LLM call - returns immediately!
             planningFuture = getTaskPlanner().planTasksAsync(steve, command);
@@ -214,6 +221,12 @@ public class ActionExecutor {
         }
     }
 
+    private void sendDebugToChat(String message) {
+        if (!steve.level().isClientSide()) {
+            steve.sendChatMessage("[DEBUG] " + message);
+        }
+    }
+
     public void tick() {
         ticksSinceLastAction++;
 
@@ -228,9 +241,11 @@ public class ActionExecutor {
 
                     taskQueue.clear();
                     taskQueue.addAll(response.getTasks());
+                    updateDebugStatus("Plan: " + currentGoal);
 
                     if (SteveConfig.ENABLE_CHAT_RESPONSES.get()) {
                         sendToGUI(steve.getSteveName(), "Okay! " + currentGoal);
+                        sendDebugToChat("Plan: " + currentGoal);
                     }
 
                     SteveMod.LOGGER.info("Steve '{}' async planning complete: {} tasks queued",
@@ -238,14 +253,17 @@ public class ActionExecutor {
                 } else {
                     sendToGUI(steve.getSteveName(), "I couldn't understand that command.");
                     SteveMod.LOGGER.warn("Steve '{}' async planning returned null response", steve.getSteveName());
+                    updateDebugStatus("Plan failed");
                 }
 
             } catch (java.util.concurrent.CancellationException e) {
                 SteveMod.LOGGER.info("Steve '{}' planning was cancelled", steve.getSteveName());
                 sendToGUI(steve.getSteveName(), "Planning cancelled.");
+                updateDebugStatus("Planning cancelled");
             } catch (Exception e) {
                 SteveMod.LOGGER.error("Steve '{}' failed to get planning result", steve.getSteveName(), e);
                 sendToGUI(steve.getSteveName(), "Oops, something went wrong while planning!");
+                updateDebugStatus("Planning error");
             } finally {
                 isPlanning = false;
                 planningFuture = null;
@@ -265,9 +283,18 @@ public class ActionExecutor {
                     // Action failed, need to replan
                     if (SteveConfig.ENABLE_CHAT_RESPONSES.get()) {
                         sendToGUI(steve.getSteveName(), "Problem: " + result.getMessage());
+                        sendDebugToChat("Problem: " + result.getMessage());
                     }
+                    updateDebugStatus("Problem: " + result.getMessage());
                 }
-                
+
+                if (SteveConfig.ENABLE_CHAT_RESPONSES.get()) {
+                    sendDebugToChat("Done: " + result.getMessage());
+                }
+                if (result.isSuccess()) {
+                    updateDebugStatus("Done: " + result.getMessage());
+                }
+
                 currentAction = null;
             } else {
                 if (ticksSinceLastAction % 100 == 0) {
@@ -275,6 +302,7 @@ public class ActionExecutor {
                         steve.getSteveName(), currentAction.getDescription());
                 }
                 currentAction.tick();
+                updateDebugStatus("Action: " + currentAction.getDescription());
                 return;
             }
         }
@@ -293,23 +321,34 @@ public class ActionExecutor {
             if (idleFollowAction == null) {
                 idleFollowAction = new IdleFollowAction(steve);
                 idleFollowAction.start();
+                updateDebugStatus("Idle: following player");
             } else if (idleFollowAction.isComplete()) {
                 // Restart idle following if it stopped
                 idleFollowAction = new IdleFollowAction(steve);
                 idleFollowAction.start();
+                updateDebugStatus("Idle: following player");
             } else {
                 // Continue idle following
                 idleFollowAction.tick();
+                updateDebugStatus("Idle: following player");
             }
         } else if (idleFollowAction != null) {
             idleFollowAction.cancel();
             idleFollowAction = null;
+        }
+
+        if (!isPlanning && taskQueue.isEmpty() && currentAction == null && idleFollowAction == null) {
+            updateDebugStatus("Idle");
         }
     }
 
     private void executeTask(Task task) {
         SteveMod.LOGGER.info("Steve '{}' executing task: {} (action type: {})", 
             steve.getSteveName(), task, task.getAction());
+        if (SteveConfig.ENABLE_CHAT_RESPONSES.get()) {
+            sendDebugToChat("Starting: " + task.getAction() + " " + task.getParameters());
+        }
+        updateDebugStatus("Action: " + task.getAction() + " " + task.getParameters());
         
         currentAction = createAction(task);
         
@@ -448,5 +487,19 @@ public class ActionExecutor {
      */
     public boolean isPlanning() {
         return isPlanning;
+    }
+
+    private void updateDebugStatus(String status) {
+        if (status == null || status.isBlank()) {
+            status = "Idle";
+        }
+        if (status.length() > 120) {
+            status = status.substring(0, 117) + "...";
+        }
+        if (status.equals(lastDebugStatus)) {
+            return;
+        }
+        lastDebugStatus = status;
+        steve.setDebugStatus(status);
     }
 }

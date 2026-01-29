@@ -21,8 +21,20 @@ public class ClientEventHandler {
         }
         
         if (KeyBindings.TOGGLE_GUI != null && KeyBindings.TOGGLE_GUI.consumeClick()) {
+            if (mc.screen instanceof SteveOverlayScreen) {
+                return;
+            }
             com.steve.ai.SteveMod.LOGGER.info("Keybinding pressed: TOGGLE_GUI");
             SteveGUI.toggle();
         }
+
+        if (KeyBindings.TOGGLE_STEVE_POV != null && KeyBindings.TOGGLE_STEVE_POV.consumeClick()) {
+            boolean switched = StevePovScreenshot.toggleSteveCamera();
+            if (!switched) {
+                com.steve.ai.SteveMod.LOGGER.warn("No Steve found for POV camera toggle");
+            }
+        }
+
+        StevePovScreenshot.onClientTick();
     }
 }

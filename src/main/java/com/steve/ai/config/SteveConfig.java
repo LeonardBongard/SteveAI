@@ -12,6 +12,7 @@ public class SteveConfig {
     public static final ForgeConfigSpec.IntValue ACTION_TICK_DELAY;
     public static final ForgeConfigSpec.BooleanValue ENABLE_CHAT_RESPONSES;
     public static final ForgeConfigSpec.IntValue MAX_ACTIVE_STEVES;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_DEBUG_OVERLAY;
     
     // Ollama configuration
     public static final ForgeConfigSpec.ConfigValue<String> OLLAMA_BASE_URL;
@@ -74,7 +75,11 @@ public class SteveConfig {
         ENABLE_CHAT_RESPONSES = builder
             .comment("Allow Steves to respond in chat")
             .define("enableChatResponses", true);
-        
+
+        ENABLE_DEBUG_OVERLAY = builder
+            .comment("Show on-screen debug overlay with Steve status")
+            .define("enableDebugOverlay", true);
+
         MAX_ACTIVE_STEVES = builder
             .comment("Maximum number of Steves that can be active simultaneously")
             .defineInRange("maxActiveSteves", 10, 1, 50);
@@ -84,4 +89,3 @@ public class SteveConfig {
         SPEC = builder.build();
     }
 }
-

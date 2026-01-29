@@ -1,6 +1,7 @@
 package com.steve.ai.client;
 
 import com.steve.ai.SteveMod;
+import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.DeltaTracker;
@@ -45,6 +46,9 @@ public class SteveGUI {
     private static final int USER_BUBBLE_COLOR = 0xC04CAF50; // Green bubble for user
     private static final int STEVE_BUBBLE_COLOR = 0xC02196F3; // Blue bubble for Steve
     private static final int SYSTEM_BUBBLE_COLOR = 0xC0FF9800; // Orange bubble for system
+    private static final int DEBUG_BG_COLOR = 0xAA000000;
+    private static final int DEBUG_TEXT_COLOR = 0xFFE0E0E0;
+    private static final int DEBUG_ACCENT_COLOR = 0xFF7CD2FF;
 
     private static class ChatMessage {
         String sender; // "You", "Steve", "Alex", "System", etc.
@@ -140,7 +144,58 @@ public class SteveGUI {
     }
 
     private static void renderOverlay(GuiGraphics graphics, DeltaTracker deltaTracker) {
+        if (SteveConfig.ENABLE_DEBUG_OVERLAY.get()) {
+            renderDebugOverlay(graphics);
+        }
         renderPanel(graphics);
+    }
+
+    private static void renderDebugOverlay(GuiGraphics graphics) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) return;
+
+        List<SteveEntity> steves = mc.level.getEntitiesOfClass(
+            SteveEntity.class,
+            mc.player.getBoundingBox().inflate(96)
+        );
+
+        if (steves.isEmpty()) {
+            return;
+        }
+
+        List<String> lines = new ArrayList<>();
+        lines.add("Steve Debug");
+        int maxLines = 5;
+        int count = 0;
+        for (SteveEntity steve : steves) {
+            if (count >= maxLines) break;
+            String name = steve.getSteveName();
+            String status = steve.getDebugStatus();
+            if (status == null || status.isBlank()) {
+                status = "Idle";
+            }
+            lines.add(name + ": " + status);
+            count++;
+        }
+
+        int padding = 4;
+        int lineHeight = mc.font.lineHeight + 2;
+        int width = 0;
+        for (String line : lines) {
+            width = Math.max(width, mc.font.width(line));
+        }
+        int height = lineHeight * lines.size();
+
+        int x = 6;
+        int y = 6;
+        graphics.fill(x - padding, y - padding, x + width + padding, y + height + padding, DEBUG_BG_COLOR);
+
+        int yLine = y;
+        for (int i = 0; i < lines.size(); i++) {
+            int color = (i == 0) ? DEBUG_ACCENT_COLOR : DEBUG_TEXT_COLOR;
+            graphics.drawString(mc.font, lines.get(i), x, yLine, color);
+            yLine += lineHeight;
+        }
     }
 
     public static void renderPanel(GuiGraphics graphics) {
@@ -173,7 +228,7 @@ public class SteveGUI {
         int headerHeight = 35;
         graphics.fillGradient(panelX, panelY, screenWidth, headerHeight, HEADER_COLOR, HEADER_COLOR);
         graphics.drawString(mc.font, "§lSteve AI", panelX + PANEL_PADDING, panelY + 8, TEXT_COLOR);
-        graphics.drawString(mc.font, "§7Press K to close", panelX + PANEL_PADDING, panelY + 20, 0xFF888888);
+        graphics.drawString(mc.font, "§7Press Esc to close", panelX + PANEL_PADDING, panelY + 20, 0xFF888888);
 
         // Message history area
         int inputAreaY = screenHeight - 80;
@@ -395,6 +450,18 @@ public class SteveGUI {
         }
         
         addUserMessage(command);
+
+        String commandLower = command.trim().toLowerCase();
+        if (commandLower.equals("screenshot") || commandLower.equals("pov screenshot") || commandLower.equals("pov") ||
+            commandLower.equals("cheat screenshot") || commandLower.equals("cheat pov") ||
+            commandLower.equals("cheat pov screenshot")) {
+            if (StevePovScreenshot.requestNearestSteve()) {
+                addSystemMessage("Capturing Steve POV screenshot...");
+            } else {
+                addSystemMessage("No Steve agents found for POV screenshot.");
+            }
+            return;
+        }
 
         if (command.toLowerCase().startsWith("spawn ")) {
             String name = command.substring(6).trim();
