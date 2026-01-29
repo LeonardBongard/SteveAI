@@ -123,6 +123,7 @@ public class MineBlockAction extends BaseAction {
         }
         
         steve.setFlying(true);
+        steve.setInvulnerableBuilding(true); // Prevent suffocation damage while mining
         
         equipIronPickaxe();
         
@@ -141,6 +142,7 @@ public class MineBlockAction extends BaseAction {
         
         if (ticksRunning > MAX_TICKS) {
             steve.setFlying(false);
+            steve.setInvulnerableBuilding(false);
             steve.setItemInHand(InteractionHand.MAIN_HAND, net.minecraft.world.item.ItemStack.EMPTY);
             result = ActionResult.failure("Mining timeout - only found " + minedCount + " blocks");
             return;
@@ -162,6 +164,7 @@ public class MineBlockAction extends BaseAction {
                 if (minedCount >= targetQuantity) {
                     // Found enough ore, mission accomplished
                     steve.setFlying(false);
+                    steve.setInvulnerableBuilding(false);
                     steve.setItemInHand(InteractionHand.MAIN_HAND, net.minecraft.world.item.ItemStack.EMPTY);
                     result = ActionResult.success("Mined " + minedCount + " " + targetBlock.getName().getString());
                     return;
@@ -187,6 +190,7 @@ public class MineBlockAction extends BaseAction {
             
             if (minedCount >= targetQuantity) {
                 steve.setFlying(false);
+                steve.setInvulnerableBuilding(false);
                 steve.setItemInHand(InteractionHand.MAIN_HAND, net.minecraft.world.item.ItemStack.EMPTY);
                 result = ActionResult.success("Mined " + minedCount + " " + targetBlock.getName().getString());
                 return;
@@ -201,6 +205,7 @@ public class MineBlockAction extends BaseAction {
     @Override
     protected void onCancel() {
         steve.setFlying(false);
+        steve.setInvulnerableBuilding(false);
         steve.getNavigation().stop();
         steve.setItemInHand(InteractionHand.MAIN_HAND, net.minecraft.world.item.ItemStack.EMPTY);
     }
@@ -370,6 +375,13 @@ public class MineBlockAction extends BaseAction {
             put("redstone", "redstone_ore");
             put("lapis", "lapis_ore");
             put("emerald", "emerald_ore");
+            // Wood/log aliases
+            put("wood", "oak_log");
+            put("woods", "oak_log");
+            put("log", "oak_log");
+            put("logs", "oak_log");
+            put("tree", "oak_log");
+            put("trees", "oak_log");
         }};
         
         if (resourceToOre.containsKey(blockName)) {
