@@ -2,7 +2,7 @@ package com.steve.ai.util;
 
 import com.steve.ai.entity.SteveEntity;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -60,8 +60,10 @@ public class ActionUtils {
             blockName = "minecraft:" + blockName;
         }
 
-        ResourceLocation resourceLocation = new ResourceLocation(blockName);
-        Block block = BuiltInRegistries.BLOCK.get(resourceLocation);
-        return block != null ? block : Blocks.AIR;
+        Identifier identifier = Identifier.tryParse(blockName);
+        if (identifier == null) {
+            return Blocks.AIR;
+        }
+        return BuiltInRegistries.BLOCK.getOptional(identifier).orElse(Blocks.AIR);
     }
 }

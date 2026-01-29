@@ -5,13 +5,15 @@ import com.steve.ai.command.SteveCommands;
 import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
 import com.steve.ai.entity.SteveManager;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.entity.EntityAttributeCreationEvent;
-import net.minecraftforge.eventbus.api.IEventBus;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.eventbus.api.bus.BusGroup;
 import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.config.ModConfig;
@@ -38,25 +40,37 @@ public class SteveMod {
         () -> EntityType.Builder.of(SteveEntity::new, MobCategory.CREATURE)
             .sized(0.6F, 1.8F)
             .clientTrackingRange(10)
-            .build("steve"));
+            .build(ResourceKey.create(Registries.ENTITY_TYPE, Identifier.fromNamespaceAndPath(MODID, "steve"))));
 
     private static SteveManager steveManager;
 
     public SteveMod() {
         LOGGER.info("SteveMod constructor start");
-        IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
+        BusGroup modBusGroup = FMLJavaModLoadingContext.get().getModBusGroup();
 
-        ENTITIES.register(modEventBus);
+        ENTITIES.register(modBusGroup);
 
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, SteveConfig.SPEC);
 
-        modEventBus.addListener(this::commonSetup);
-        modEventBus.addListener(this::entityAttributes);
+        FMLCommonSetupEvent.getBus(modBusGroup).addListener(this::commonSetup);
+        EntityAttributeCreationEvent.getBus(modBusGroup).addListener(this::entityAttributes);
 
-        MinecraftForge.EVENT_BUS.register(this);
+        RegisterCommandsEvent.BUS.addListener(this::onCommandRegister);
         
         if (net.minecraftforge.fml.loading.FMLEnvironment.dist.isClient()) {
-            MinecraftForge.EVENT_BUS.register(com.steve.ai.client.SteveGUI.class);
+            net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent.getBus(modBusGroup).addListener(
+                com.steve.ai.client.ClientSetup::onClientSetup
+            );
+            net.minecraftforge.client.event.EntityRenderersEvent.RegisterRenderers.BUS.addListener(
+                com.steve.ai.client.ClientSetup::registerRenderers
+            );
+            com.steve.ai.client.SteveGUI.registerOverlayLayer();
+            net.minecraftforge.event.TickEvent.ClientTickEvent.Post.BUS.addListener(
+                com.steve.ai.client.ClientEventHandler::onClientTick
+            );
+            net.minecraftforge.client.event.RegisterKeyMappingsEvent.BUS.addListener(
+                com.steve.ai.client.KeyBindings::registerKeys
+            );
         }
         
         steveManager = new SteveManager();
@@ -71,7 +85,6 @@ public class SteveMod {
         event.put(STEVE_ENTITY.get(), SteveEntity.createAttributes().build());
     }
 
-    @SubscribeEvent
     public void onCommandRegister(RegisterCommandsEvent event) {
         LOGGER.info("SteveMod registering commands");
         SteveCommands.register(event.getDispatcher());

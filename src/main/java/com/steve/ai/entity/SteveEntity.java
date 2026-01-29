@@ -2,11 +2,12 @@ package com.steve.ai.entity;
 
 import com.steve.ai.action.ActionExecutor;
 import com.steve.ai.memory.SteveMemory;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.DifficultyInstance;
 import net.minecraft.world.entity.*;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
@@ -57,16 +58,16 @@ public class SteveEntity extends PathfinderMob {
     }
 
     @Override
-    protected void defineSynchedData() {
-        super.defineSynchedData();
-        this.entityData.define(STEVE_NAME, "Steve");
+    protected void defineSynchedData(SynchedEntityData.Builder builder) {
+        super.defineSynchedData(builder);
+        builder.define(STEVE_NAME, "Steve");
     }
 
     @Override
     public void tick() {
         super.tick();
         
-        if (!this.level().isClientSide) {
+        if (!this.level().isClientSide()) {
             actionExecutor.tick();
         }
     }
@@ -90,46 +91,38 @@ public class SteveEntity extends PathfinderMob {
     }
 
     @Override
-    public void addAdditionalSaveData(CompoundTag tag) {
-        super.addAdditionalSaveData(tag);
-        tag.putString("SteveName", this.steveName);
-        
-        CompoundTag memoryTag = new CompoundTag();
-        this.memory.saveToNBT(memoryTag);
-        tag.put("Memory", memoryTag);
+    public void addAdditionalSaveData(ValueOutput output) {
+        output.putString("SteveName", this.steveName);
+        ValueOutput memoryOutput = output.child("Memory");
+        this.memory.saveToNBT(memoryOutput);
     }
 
     @Override
-    public void readAdditionalSaveData(CompoundTag tag) {
-        super.readAdditionalSaveData(tag);
-        if (tag.contains("SteveName")) {
-            this.setSteveName(tag.getString("SteveName"));
-        }
-        
-        if (tag.contains("Memory")) {
-            this.memory.loadFromNBT(tag.getCompound("Memory"));
-        }
+    public void readAdditionalSaveData(ValueInput input) {
+        this.setSteveName(input.getStringOr("SteveName", this.steveName));
+        this.memory.loadFromNBT(input.childOrEmpty("Memory"));
     }
 
     @Override
     @Nullable
     public SpawnGroupData finalizeSpawn(ServerLevelAccessor level, DifficultyInstance difficulty,
-                                       MobSpawnType spawnType, @Nullable SpawnGroupData spawnData,
-                                       @Nullable CompoundTag tag) {
-        spawnData = super.finalizeSpawn(level, difficulty, spawnType, spawnData, tag);
+                                       EntitySpawnReason spawnType, @Nullable SpawnGroupData spawnData) {
+        spawnData = super.finalizeSpawn(level, difficulty, spawnType, spawnData);
         return spawnData;
     }
 
     public void sendChatMessage(String message) {
-        if (this.level().isClientSide) return;
+        if (this.level().isClientSide()) return;
         
         Component chatComponent = Component.literal("<" + this.steveName + "> " + message);
-        this.level().players().forEach(player -> player.sendSystemMessage(chatComponent));
+        this.level().players().forEach(player -> player.displayClientMessage(chatComponent, false));
     }
 
     @Override
-    protected void dropCustomDeathLoot(net.minecraft.world.damagesource.DamageSource source, int looting, boolean recentlyHit) {
-        super.dropCustomDeathLoot(source, looting, recentlyHit);
+    protected void dropCustomDeathLoot(net.minecraft.server.level.ServerLevel level,
+                                       net.minecraft.world.damagesource.DamageSource source,
+                                       boolean recentlyHit) {
+        super.dropCustomDeathLoot(level, source, recentlyHit);
     }
 
     public void setFlying(boolean flying) {
@@ -151,18 +144,8 @@ public class SteveEntity extends PathfinderMob {
     }
 
     @Override
-    public boolean hurt(net.minecraft.world.damagesource.DamageSource source, float amount) {
-        return false;
-    }
-
-    @Override
-    public boolean isInvulnerableTo(net.minecraft.world.damagesource.DamageSource source) {
-        return true;
-    }
-
-    @Override
     public void travel(net.minecraft.world.phys.Vec3 travelVector) {
-        if (this.isFlying && !this.level().isClientSide) {
+        if (this.isFlying && !this.level().isClientSide()) {
             double motionY = this.getDeltaMovement().y;
             
             if (this.getNavigation().isInProgress()) {
@@ -182,7 +165,7 @@ public class SteveEntity extends PathfinderMob {
     }
 
     @Override
-    public boolean causeFallDamage(float distance, float damageMultiplier, net.minecraft.world.damagesource.DamageSource source) {
+    public boolean causeFallDamage(double distance, float damageMultiplier, net.minecraft.world.damagesource.DamageSource source) {
         // No fall damage when flying
         if (this.isFlying) {
             return false;
@@ -190,4 +173,3 @@ public class SteveEntity extends PathfinderMob {
         return super.causeFallDamage(distance, damageMultiplier, source);
     }
 }
-

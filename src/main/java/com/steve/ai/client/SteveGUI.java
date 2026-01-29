@@ -1,14 +1,15 @@
 package com.steve.ai.client;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import com.steve.ai.SteveMod;
 import com.steve.ai.entity.SteveEntity;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.resources.Identifier;
 import net.minecraft.network.chat.Component;
-import net.minecraftforge.client.event.RenderGuiOverlayEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.client.event.AddGuiOverlayLayersEvent;
+import net.minecraftforge.client.gui.overlay.ForgeLayeredDraw;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -128,12 +129,16 @@ public class SteveGUI {
         addMessage("System", text, SYSTEM_BUBBLE_COLOR, false);
     }
 
-    @SubscribeEvent
-    public static void onRenderOverlay(RenderGuiOverlayEvent.Post event) {
-        if (event.getOverlay().id().toString().contains("hotbar")) {
-            return; // Don't render over hotbar
-        }
+    public static void registerOverlayLayer() {
+        AddGuiOverlayLayersEvent.BUS.addListener(SteveGUI::onAddGuiOverlayLayers);
+    }
 
+    private static void onAddGuiOverlayLayers(AddGuiOverlayLayersEvent event) {
+        Identifier layerId = Identifier.fromNamespaceAndPath(SteveMod.MODID, "steve_gui");
+        event.getLayeredDraw().addAbove(ForgeLayeredDraw.HOTBAR_AND_DECOS, layerId, SteveGUI::renderOverlay);
+    }
+
+    private static void renderOverlay(GuiGraphics graphics, DeltaTracker deltaTracker) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
 
@@ -146,7 +151,6 @@ public class SteveGUI {
         // Don't render if completely hidden
         if (slideOffset >= PANEL_WIDTH) return;
 
-        GuiGraphics graphics = event.getGuiGraphics();
         int screenWidth = mc.getWindow().getGuiScaledWidth();
         int screenHeight = mc.getWindow().getGuiScaledHeight();
         
@@ -154,14 +158,6 @@ public class SteveGUI {
         int panelY = 0;
         int panelHeight = screenHeight;
 
-        RenderSystem.enableBlend();
-        RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
-        RenderSystem.blendFuncSeparate(
-            com.mojang.blaze3d.platform.GlStateManager.SourceFactor.SRC_ALPHA,
-            com.mojang.blaze3d.platform.GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
-            com.mojang.blaze3d.platform.GlStateManager.SourceFactor.ONE,
-            com.mojang.blaze3d.platform.GlStateManager.DestFactor.ZERO
-        );
         graphics.fillGradient(panelX, panelY, screenWidth, panelHeight, BACKGROUND_COLOR, BACKGROUND_COLOR);
         
         graphics.fillGradient(panelX - 2, panelY, panelX, panelHeight, BORDER_COLOR, BORDER_COLOR);
@@ -264,13 +260,13 @@ public class SteveGUI {
             inputBox.setX(panelX + PANEL_PADDING);
             inputBox.setY(inputAreaY + 25);
             inputBox.setWidth(PANEL_WIDTH - (PANEL_PADDING * 2));
-            inputBox.render(graphics, (int)mc.mouseHandler.xpos(), (int)mc.mouseHandler.ypos(), mc.getFrameTime());
+            inputBox.render(graphics, (int)mc.mouseHandler.xpos(), (int)mc.mouseHandler.ypos(),
+                deltaTracker.getGameTimeDeltaPartialTick(false));
         }
 
         graphics.drawString(mc.font, "§8Enter: Send | ↑↓: History | Scroll: Messages", 
             panelX + PANEL_PADDING, screenHeight - 15, 0xFF555555);
         
-        RenderSystem.disableBlend();
     }
 
     /**
@@ -337,7 +333,7 @@ public class SteveGUI {
         // Backspace, Delete, Home, End, Left, Right - pass to input box
         if (keyCode == 259 || keyCode == 261 || keyCode == 268 || keyCode == 269 || 
             keyCode == 263 || keyCode == 262) {
-            inputBox.keyPressed(keyCode, scanCode, modifiers);
+            inputBox.keyPressed(new net.minecraft.client.input.KeyEvent(keyCode, scanCode, modifiers));
             return true;
         }
 
@@ -346,7 +342,7 @@ public class SteveGUI {
 
     public static boolean handleCharTyped(char codePoint, int modifiers) {
         if (isOpen && inputBox != null) {
-            inputBox.charTyped(codePoint, modifiers);
+            inputBox.charTyped(new net.minecraft.client.input.CharacterEvent(codePoint, modifiers));
             return true; // Consumed
         }
         return false;
@@ -366,6 +362,11 @@ public class SteveGUI {
             } else {
                 inputBox.setFocused(false);
             }
+            inputBox.onClick(
+                new net.minecraft.client.input.MouseButtonEvent(mouseX, mouseY,
+                    new net.minecraft.client.input.MouseButtonInfo(button, 0)),
+                false
+            );
         }
     }
 
@@ -463,7 +464,6 @@ public class SteveGUI {
 
     public static void tick() {
         if (isOpen && inputBox != null) {
-            inputBox.tick();
             // Auto-focus input box when panel is open
             if (!inputBox.isFocused()) {
                 inputBox.setFocused(true);

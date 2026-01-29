@@ -5,7 +5,7 @@ import com.steve.ai.action.Task;
 import com.steve.ai.entity.SteveEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -78,8 +78,10 @@ public class PlaceBlockAction extends BaseAction {
         if (!blockName.contains(":")) {
             blockName = "minecraft:" + blockName;
         }
-        ResourceLocation resourceLocation = new ResourceLocation(blockName);
-        return BuiltInRegistries.BLOCK.get(resourceLocation);
+        Identifier identifier = Identifier.tryParse(blockName);
+        if (identifier == null) {
+            return Blocks.AIR;
+        }
+        return BuiltInRegistries.BLOCK.getOptional(identifier).orElse(Blocks.AIR);
     }
 }
-

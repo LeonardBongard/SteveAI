@@ -99,12 +99,14 @@ public class CombatAction extends BaseAction {
         lastZ = currentZ;
         
         if (distance <= ATTACK_RANGE) {
-            steve.doHurtTarget(target);
+            if (steve.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+                steve.doHurtTarget(serverLevel, target);
+            }
             steve.swing(net.minecraft.world.InteractionHand.MAIN_HAND, true);
             
             // Attack 3 times per second (every 6-7 ticks)
-            if (ticksRunning % 7 == 0) {
-                steve.doHurtTarget(target);
+            if (ticksRunning % 7 == 0 && steve.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+                steve.doHurtTarget(serverLevel, target);
             }
         }
     }

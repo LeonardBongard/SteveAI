@@ -2,6 +2,9 @@ package com.steve.ai.client;
 
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.CharacterEvent;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 /**
@@ -26,9 +29,9 @@ public class SteveOverlayScreen extends Screen {
     }
 
     @Override
-    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+    public boolean keyPressed(KeyEvent event) {
         // K key to close
-        if (keyCode == 75 && !hasShiftDown() && !hasControlDown() && !hasAltDown()) { // K
+        if (event.key() == 75 && !event.hasShiftDown() && !event.hasControlDown() && !event.hasAltDown()) { // K
             SteveGUI.toggle();
             if (minecraft != null) {
                 minecraft.setScreen(null);
@@ -36,24 +39,24 @@ public class SteveOverlayScreen extends Screen {
             return true;
         }
         
-        return SteveGUI.handleKeyPress(keyCode, scanCode, modifiers);
+        return SteveGUI.handleKeyPress(event.key(), event.scancode(), event.modifiers());
     }
 
     @Override
-    public boolean charTyped(char codePoint, int modifiers) {
+    public boolean charTyped(CharacterEvent event) {
         // Pass character input to SteveGUI
-        return SteveGUI.handleCharTyped(codePoint, modifiers);
+        return SteveGUI.handleCharTyped((char) event.codepoint(), event.modifiers());
     }
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        SteveGUI.handleMouseClick(mouseX, mouseY, button);
+    public boolean mouseClicked(MouseButtonEvent event, boolean isDoubleClick) {
+        SteveGUI.handleMouseClick(event.x(), event.y(), event.button());
         return true;
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollDelta) {
-        SteveGUI.handleMouseScroll(scrollDelta);
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        SteveGUI.handleMouseScroll(scrollY);
         return true;
     }
 
@@ -65,4 +68,3 @@ public class SteveOverlayScreen extends Screen {
         }
     }
 }
-

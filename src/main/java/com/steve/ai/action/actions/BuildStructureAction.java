@@ -13,7 +13,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
@@ -285,9 +285,11 @@ public class BuildStructureAction extends BaseAction {
         if (!blockName.contains(":")) {
             blockName = "minecraft:" + blockName;
         }
-        ResourceLocation resourceLocation = new ResourceLocation(blockName);
-        Block block = BuiltInRegistries.BLOCK.get(resourceLocation);
-        return block != null ? block : Blocks.AIR;
+        Identifier identifier = Identifier.tryParse(blockName);
+        if (identifier == null) {
+            return Blocks.AIR;
+        }
+        return BuiltInRegistries.BLOCK.getOptional(identifier).orElse(Blocks.AIR);
     }
     
     /**
@@ -429,7 +431,7 @@ public class BuildStructureAction extends BaseAction {
                 
                 if (!blockState.isAir()) {
                     Block block = blockState.getBlock();
-                    if (block != Blocks.GRASS && block != Blocks.TALL_GRASS && 
+                    if (block != Blocks.SHORT_GRASS && block != Blocks.TALL_GRASS &&
                         block != Blocks.FERN && block != Blocks.DEAD_BUSH &&
                         block != Blocks.DANDELION && block != Blocks.POPPY) {
                         unsuitable++;
@@ -508,4 +510,3 @@ public class BuildStructureAction extends BaseAction {
     }
     
 }
-

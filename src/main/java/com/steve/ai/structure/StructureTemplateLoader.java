@@ -3,8 +3,9 @@ package com.steve.ai.structure;
 import com.steve.ai.SteveMod;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -67,7 +68,7 @@ public class StructureTemplateLoader {
             if (resourceStream != null) {
                 SteveMod.LOGGER.info("Found structure in resources: {}", resourcePath);
                 try {
-                    CompoundTag nbt = NbtIo.readCompressed(resourceStream);
+                    CompoundTag nbt = NbtIo.readCompressed(resourceStream, NbtAccounter.defaultQuota());
                     resourceStream.close();
                     return parseNBTStructure(nbt, structureName);
                 } catch (IOException e) {
@@ -77,7 +78,7 @@ public class StructureTemplateLoader {
         }
         
         try {
-            ResourceLocation resourceLocation = new ResourceLocation("steve", structureName);
+            Identifier resourceLocation = Identifier.fromNamespaceAndPath("steve", structureName);
             var templateManager = level.getStructureManager();
             var template = templateManager.get(resourceLocation);
             
@@ -95,7 +96,7 @@ public class StructureTemplateLoader {
      */
     private static LoadedTemplate loadFromFile(File file, String name) {
         try (InputStream inputStream = new FileInputStream(file)) {
-            CompoundTag nbt = NbtIo.readCompressed(inputStream);
+            CompoundTag nbt = NbtIo.readCompressed(inputStream, NbtAccounter.defaultQuota());
             return parseNBTStructure(nbt, name);
         } catch (IOException e) {
             SteveMod.LOGGER.error("Failed to load structure from file: {}", file, e);
@@ -127,21 +128,23 @@ public class StructureTemplateLoader {
     private static LoadedTemplate parseNBTStructure(CompoundTag nbt, String name) {
         List<TemplateBlock> blocks = new ArrayList<>();
         
-        var sizeList = nbt.getList("size", 3); // 3 = TAG_Int
-        int width = sizeList.getInt(0);
-        int height = sizeList.getInt(1);
-        int depth = sizeList.getInt(2);
+        var sizeList = nbt.getListOrEmpty("size");
+        int width = sizeList.getIntOr(0, 0);
+        int height = sizeList.getIntOr(1, 0);
+        int depth = sizeList.getIntOr(2, 0);
         
-        var paletteList = nbt.getList("palette", 10); // 10 = TAG_Compound
+        var paletteList = nbt.getListOrEmpty("palette");
         List<BlockState> palette = new ArrayList<>();
         
         for (int i = 0; i < paletteList.size(); i++) {
-            CompoundTag blockTag = paletteList.getCompound(i);
-            String blockName = blockTag.getString("Name");
+            CompoundTag blockTag = paletteList.getCompoundOrEmpty(i);
+            String blockName = blockTag.getStringOr("Name", "");
             
             try {
-                ResourceLocation blockLocation = new ResourceLocation(blockName);
-                Block block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(blockLocation);
+                Identifier blockLocation = Identifier.tryParse(blockName);
+                Block block = blockLocation != null
+                    ? net.minecraft.core.registries.BuiltInRegistries.BLOCK.getOptional(blockLocation).orElse(Blocks.AIR)
+                    : Blocks.AIR;
                 palette.add(block.defaultBlockState());
             } catch (Exception e) {
                 SteveMod.LOGGER.warn("Unknown block in structure: {}", blockName);
@@ -149,17 +152,17 @@ public class StructureTemplateLoader {
             }
         }
         
-        var blocksList = nbt.getList("blocks", 10);
+        var blocksList = nbt.getListOrEmpty("blocks");
         for (int i = 0; i < blocksList.size(); i++) {
-            CompoundTag blockTag = blocksList.getCompound(i);
+            CompoundTag blockTag = blocksList.getCompoundOrEmpty(i);
             
-            int paletteIndex = blockTag.getInt("state");
-            var posList = blockTag.getList("pos", 3);
+            int paletteIndex = blockTag.getIntOr("state", 0);
+            var posList = blockTag.getListOrEmpty("pos");
             
             BlockPos pos = new BlockPos(
-                posList.getInt(0),
-                posList.getInt(1),
-                posList.getInt(2)
+                posList.getIntOr(0, 0),
+                posList.getIntOr(1, 0),
+                posList.getIntOr(2, 0)
             );
             
             BlockState state = palette.get(paletteIndex);
@@ -192,4 +195,3 @@ public class StructureTemplateLoader {
         return structures;
     }
 }
-

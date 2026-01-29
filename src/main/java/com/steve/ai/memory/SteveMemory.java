@@ -1,9 +1,9 @@
 package com.steve.ai.memory;
 
 import com.steve.ai.entity.SteveEntity;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.StringTag;
+import com.mojang.serialization.Codec;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 
 import java.util.ArrayList;
 import java.util.LinkedList;
@@ -56,28 +56,21 @@ public class SteveMemory {
         currentGoal = "";
     }
 
-    public void saveToNBT(CompoundTag tag) {
-        tag.putString("CurrentGoal", currentGoal);
-        
-        ListTag actionsList = new ListTag();
+    public void saveToNBT(ValueOutput output) {
+        output.putString("CurrentGoal", currentGoal);
+
+        ValueOutput.TypedOutputList<String> actionsList = output.list("RecentActions", Codec.STRING);
         for (String action : recentActions) {
-            actionsList.add(StringTag.valueOf(action));
+            actionsList.add(action);
         }
-        tag.put("RecentActions", actionsList);
     }
 
-    public void loadFromNBT(CompoundTag tag) {
-        if (tag.contains("CurrentGoal")) {
-            currentGoal = tag.getString("CurrentGoal");
-        }
-        
-        if (tag.contains("RecentActions")) {
+    public void loadFromNBT(ValueInput input) {
+        currentGoal = input.getStringOr("CurrentGoal", currentGoal);
+
+        input.list("RecentActions", Codec.STRING).ifPresent(list -> {
             recentActions.clear();
-            ListTag actionsList = tag.getList("RecentActions", 8); // 8 = String type
-            for (int i = 0; i < actionsList.size(); i++) {
-                recentActions.add(actionsList.getString(i));
-            }
-        }
+            list.stream().forEach(recentActions::add);
+        });
     }
 }
-

@@ -209,7 +209,7 @@ public class ActionExecutor {
      * Send a message to the GUI pane (client-side only, no chat spam)
      */
     private void sendToGUI(String steveName, String message) {
-        if (steve.level().isClientSide) {
+        if (steve.level().isClientSide()) {
             com.steve.ai.client.SteveGUI.addSteveMessage(steveName, message);
         }
     }
@@ -450,4 +450,3 @@ public class ActionExecutor {
         return isPlanning;
     }
 }
-

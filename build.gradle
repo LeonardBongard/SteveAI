@@ -12,10 +12,10 @@ base {
     archivesName = 'steve-ai-mod'
 }
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 minecraft {
-    mappings channel: 'official', version: '1.20.1'
+    mappings channel: 'official', version: '1.21.11'
 
     runs {
         client {
@@ -47,10 +47,13 @@ minecraft {
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 repositories {
+    maven { url 'https://libraries.minecraft.net/' }
+    maven { url 'https://repo.lwjgl.org/' }
+    maven { url 'https://maven.minecraftforge.net/' }
     mavenCentral()
 }
 dependencies {
-    minecraft 'net.minecraftforge:forge:1.20.1-47.4.10'
+    minecraft 'net.minecraftforge:forge:1.21.11-61.0.8'
 
     // JUnit 5 for testing
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.9.3'
@@ -142,6 +145,13 @@ tasks.named('jarJar', net.minecraftforge.gradle.userdev.tasks.JarJar).configure 
     onlyIf {
         !(project.hasProperty("noJarJar") && project.property("noJarJar").toString().toBoolean())
     }
+}
+
+def skipReobf = (project.hasProperty("skipReobf") && project.property("skipReobf").toString().toBoolean()) ||
+    (System.getenv("SKIP_REOBF") == "1")
+
+tasks.matching { it.name == 'reobfJar' || it.name == 'reobfJarJar' }.configureEach {
+    enabled = !skipReobf
 }
 
 publishing {

@@ -3,7 +3,6 @@ package com.steve.ai.entity;
 import com.steve.ai.SteveMod;
 import com.steve.ai.config.SteveConfig;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.*;
@@ -105,4 +104,3 @@ public class SteveManager {
         }
     }
 }
-

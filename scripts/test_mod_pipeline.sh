@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Java 17 setup
-export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+# Java 21 setup
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 export PATH="$JAVA_HOME/bin:$PATH"
 
 # Build
@@ -21,12 +21,17 @@ echo "== Pipeline start: ${PIPELINE_TS} =="
 echo "Project: ${PROJECT_ROOT}"
 echo "Java: ${JAVA_HOME}"
 
+GRADLE_ARGS=(clean build)
 if [[ "${NO_JARJAR:-}" == "1" ]]; then
   echo "NO_JARJAR=1 -> building without jarJar"
-  "${PROJECT_ROOT}/gradlew" clean build -PnoJarJar=true
-else
-  "${PROJECT_ROOT}/gradlew" clean build
+  GRADLE_ARGS+=("-PnoJarJar=true")
 fi
+if [[ "${SKIP_REOBF:-1}" == "1" ]]; then
+  echo "SKIP_REOBF=1 -> skipping reobf tasks (official-name runtime)"
+  GRADLE_ARGS+=("-PskipReobf=true")
+fi
+
+"${PROJECT_ROOT}/gradlew" "${GRADLE_ARGS[@]}"
 
 # Install mod
 MC_DIR="${HOME}/Library/Application Support/minecraft"
