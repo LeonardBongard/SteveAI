@@ -14,10 +14,14 @@ out/
 
 # Minecraft
 run/
+logs/
 
 # Config with API keys
 config/steve-common.toml
 run/config/steve-common.toml
+
+# Local scratch notes
+temp_memory_chatgpt.txt
 
 # Media files (large binaries)
 *.mp4

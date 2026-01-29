@@ -4,28 +4,24 @@ import com.steve.ai.llm.async.AsyncLLMClient;
 import com.steve.ai.llm.async.LLMCache;
 import com.steve.ai.llm.async.LLMException;
 import com.steve.ai.llm.async.LLMResponse;
-import io.github.resilience4j.bulkhead.Bulkhead;
-import io.github.resilience4j.bulkhead.BulkheadRegistry;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
-import io.github.resilience4j.ratelimiter.RateLimiter;
-import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
-import io.github.resilience4j.retry.Retry;
-import io.github.resilience4j.retry.RetryRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.function.Supplier;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Decorator that adds resilience patterns to an AsyncLLMClient.
+ * Decorator that adds lightweight resilience patterns to an AsyncLLMClient.
  *
  * <p>Wraps any AsyncLLMClient implementation (OpenAI, Groq, Gemini) with
- * fault tolerance patterns from Resilience4j:</p>
+ * fault tolerance patterns:</p>
  *
  * <ul>
  *   <li><b>Circuit Breaker:</b> Fail fast when provider is down</li>
@@ -41,30 +37,108 @@ import java.util.function.Supplier;
  * <p><b>Request Flow:</b></p>
  * <pre>
  * 1. Check cache → HIT: return cached response
- * 2. Check rate limiter → FULL: wait or reject
- * 3. Check bulkhead → FULL: wait or reject
+ * 2. Check rate limiter → FULL: fallback
+ * 3. Check bulkhead → FULL: fallback
  * 4. Check circuit breaker → OPEN: fallback
  * 5. Execute request with retry
  * 6. SUCCESS: cache response, return
  * 7. FAILURE: trigger fallback handler
  * </pre>
  *
- * <p><b>Usage Example:</b></p>
- * <pre>
- * AsyncLLMClient rawClient = new AsyncOpenAIClient(apiKey, model, maxTokens, temp);
- * LLMCache cache = new LLMCache();
- * LLMFallbackHandler fallback = new LLMFallbackHandler();
- *
- * AsyncLLMClient resilientClient = new ResilientLLMClient(rawClient, cache, fallback);
- *
- * // Now all calls are protected by circuit breaker, retry, rate limiter, etc.
- * resilientClient.sendAsync("Build a house", params)
- *     .thenAccept(response -> processResponse(response));
- * </pre>
- *
  * @since 1.1.0
  */
 public class ResilientLLMClient implements AsyncLLMClient {
+
+    public enum CircuitState {
+        CLOSED,
+        OPEN,
+        HALF_OPEN
+    }
+
+    public static final class CircuitMetrics {
+        private final CircuitState state;
+        private final int windowSize;
+        private final int callCount;
+        private final int failureCount;
+        private final float failureRate;
+        private final long openUntilMs;
+
+        public CircuitMetrics(CircuitState state, int windowSize, int callCount, int failureCount, float failureRate,
+                              long openUntilMs) {
+            this.state = state;
+            this.windowSize = windowSize;
+            this.callCount = callCount;
+            this.failureCount = failureCount;
+            this.failureRate = failureRate;
+            this.openUntilMs = openUntilMs;
+        }
+
+        public CircuitState state() {
+            return state;
+        }
+
+        public int windowSize() {
+            return windowSize;
+        }
+
+        public int callCount() {
+            return callCount;
+        }
+
+        public int failureCount() {
+            return failureCount;
+        }
+
+        public float failureRate() {
+            return failureRate;
+        }
+
+        public long openUntilMs() {
+            return openUntilMs;
+        }
+    }
+
+    public static final class RateLimiterMetrics {
+        private final int limitPerMinute;
+        private final int currentWindowCount;
+        private final long windowResetMs;
+
+        public RateLimiterMetrics(int limitPerMinute, int currentWindowCount, long windowResetMs) {
+            this.limitPerMinute = limitPerMinute;
+            this.currentWindowCount = currentWindowCount;
+            this.windowResetMs = windowResetMs;
+        }
+
+        public int limitPerMinute() {
+            return limitPerMinute;
+        }
+
+        public int currentWindowCount() {
+            return currentWindowCount;
+        }
+
+        public long windowResetMs() {
+            return windowResetMs;
+        }
+    }
+
+    public static final class BulkheadMetrics {
+        private final int maxConcurrentCalls;
+        private final int availablePermits;
+
+        public BulkheadMetrics(int maxConcurrentCalls, int availablePermits) {
+            this.maxConcurrentCalls = maxConcurrentCalls;
+            this.availablePermits = availablePermits;
+        }
+
+        public int maxConcurrentCalls() {
+            return maxConcurrentCalls;
+        }
+
+        public int availablePermits() {
+            return availablePermits;
+        }
+    }
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ResilientLLMClient.class);
 
@@ -72,15 +146,22 @@ public class ResilientLLMClient implements AsyncLLMClient {
     private final LLMCache cache;
     private final LLMFallbackHandler fallbackHandler;
 
-    private final CircuitBreaker circuitBreaker;
-    private final Retry retry;
-    private final RateLimiter rateLimiter;
-    private final Bulkhead bulkhead;
+    private final Semaphore bulkhead;
+    private final Object rateLock = new Object();
+    private final Deque<Long> rateWindow = new ArrayDeque<>();
+
+    private final Object circuitLock = new Object();
+    private CircuitState circuitState = CircuitState.CLOSED;
+    private long circuitOpenUntilMs;
+    private final int[] outcomeWindow;
+    private int outcomeIndex;
+    private int outcomeCount;
+    private int failureCount;
+    private int halfOpenAttempts;
+    private int halfOpenFailures;
 
     /**
      * Constructs a ResilientLLMClient wrapping the given delegate.
-     *
-     * <p>Initializes all resilience patterns with provider-specific registries.</p>
      *
      * @param delegate        The underlying AsyncLLMClient to wrap
      * @param cache           Cache for storing responses
@@ -91,81 +172,15 @@ public class ResilientLLMClient implements AsyncLLMClient {
         this.cache = cache;
         this.fallbackHandler = fallbackHandler;
 
-        String providerId = delegate.getProviderId();
-        LOGGER.info("Initializing resilient client for provider: {}", providerId);
+        this.bulkhead = new Semaphore(ResilienceConfig.getBulkheadMaxConcurrentCalls());
+        this.outcomeWindow = new int[ResilienceConfig.getCircuitBreakerSlidingWindowSize()];
 
-        // Initialize resilience components with provider-specific names
-        CircuitBreakerRegistry cbRegistry = CircuitBreakerRegistry.of(
-            ResilienceConfig.createCircuitBreakerConfig());
-        RetryRegistry retryRegistry = RetryRegistry.of(
-            ResilienceConfig.createRetryConfig());
-        RateLimiterRegistry rlRegistry = RateLimiterRegistry.of(
-            ResilienceConfig.createRateLimiterConfig());
-        BulkheadRegistry bhRegistry = BulkheadRegistry.of(
-            ResilienceConfig.createBulkheadConfig());
-
-        this.circuitBreaker = cbRegistry.circuitBreaker(providerId);
-        this.retry = retryRegistry.retry(providerId);
-        this.rateLimiter = rlRegistry.rateLimiter(providerId);
-        this.bulkhead = bhRegistry.bulkhead(providerId);
-
-        // Register event listeners for observability
-        registerEventListeners(providerId);
-
-        LOGGER.info("Resilient client initialized for provider: {} (circuit breaker: {}, retry: {}, rate limiter: {}, bulkhead: {})",
-            providerId, circuitBreaker.getName(), retry.getName(), rateLimiter.getName(), bulkhead.getName());
-    }
-
-    /**
-     * Registers event listeners for circuit breaker state changes and other events.
-     *
-     * @param providerId Provider ID for logging
-     */
-    private void registerEventListeners(String providerId) {
-        // Circuit breaker state transitions
-        circuitBreaker.getEventPublisher()
-            .onStateTransition(event -> {
-                LOGGER.warn("[{}] Circuit breaker state: {} -> {}",
-                    providerId,
-                    event.getStateTransition().getFromState(),
-                    event.getStateTransition().getToState());
-            });
-
-        // Circuit breaker failures
-        circuitBreaker.getEventPublisher()
-            .onError(event -> {
-                LOGGER.debug("[{}] Circuit breaker recorded error: {} (duration: {}ms)",
-                    providerId,
-                    event.getThrowable().getClass().getSimpleName(),
-                    event.getElapsedDuration().toMillis());
-            });
-
-        // Retry events
-        retry.getEventPublisher()
-            .onRetry(event -> {
-                LOGGER.warn("[{}] Retry attempt {} of {} after {} (reason: {})",
-                    providerId,
-                    event.getNumberOfRetryAttempts(),
-                    ResilienceConfig.getRetryMaxAttempts(),
-                    event.getWaitInterval(),
-                    event.getLastThrowable() != null ? event.getLastThrowable().getMessage() : "unknown");
-            });
-
-        // Rate limiter events
-        rateLimiter.getEventPublisher()
-            .onFailure(event -> {
-                LOGGER.warn("[{}] Rate limiter rejected request (limit: {} req/min)",
-                    providerId,
-                    ResilienceConfig.getRateLimitPerMinute());
-            });
-
-        // Bulkhead events
-        bulkhead.getEventPublisher()
-            .onCallRejected(event -> {
-                LOGGER.warn("[{}] Bulkhead rejected request (max concurrent: {})",
-                    providerId,
-                    ResilienceConfig.getBulkheadMaxConcurrentCalls());
-            });
+        LOGGER.info("Initializing resilient client for provider: {} (circuit breaker: {}, retry: {}, rate limiter: {}, bulkhead: {})",
+            delegate.getProviderId(),
+            ResilienceConfig.getCircuitBreakerSlidingWindowSize(),
+            ResilienceConfig.getRetryMaxAttempts(),
+            ResilienceConfig.getRateLimitPerMinute(),
+            ResilienceConfig.getBulkheadMaxConcurrentCalls());
     }
 
     @Override
@@ -173,98 +188,223 @@ public class ResilientLLMClient implements AsyncLLMClient {
         String model = (String) params.getOrDefault("model", "unknown");
         String providerId = delegate.getProviderId();
 
-        // Step 1: Check cache first (fastest path)
         Optional<LLMResponse> cached = cache.get(prompt, model, providerId);
         if (cached.isPresent()) {
             LOGGER.debug("[{}] Cache hit for prompt (hash: {})", providerId, prompt.hashCode());
             return CompletableFuture.completedFuture(cached.get());
         }
 
-        LOGGER.debug("[{}] Cache miss, executing request with resilience patterns", providerId);
+        if (!tryAcquireRateLimit()) {
+            LOGGER.warn("[{}] Rate limiter rejected request (limit: {} req/min)",
+                providerId, ResilienceConfig.getRateLimitPerMinute());
+            return CompletableFuture.completedFuture(fallbackHandler.generateFallback(prompt,
+                new LLMException("Rate limit exceeded", LLMException.ErrorType.RATE_LIMIT, providerId, true)));
+        }
 
-        // Step 2: Execute with resilience patterns
-        return executeWithResilience(prompt, params);
+        if (!bulkhead.tryAcquire()) {
+            LOGGER.warn("[{}] Bulkhead rejected request (max concurrent: {})",
+                providerId, ResilienceConfig.getBulkheadMaxConcurrentCalls());
+            return CompletableFuture.completedFuture(fallbackHandler.generateFallback(prompt,
+                new LLMException("Too many concurrent requests", LLMException.ErrorType.SERVER_ERROR, providerId, true)));
+        }
+
+        if (!allowRequest()) {
+            LOGGER.warn("[{}] Circuit breaker is OPEN - rejecting request", providerId);
+            bulkhead.release();
+            return CompletableFuture.completedFuture(fallbackHandler.generateFallback(prompt,
+                new LLMException("Circuit breaker open", LLMException.ErrorType.CIRCUIT_OPEN, providerId, false)));
+        }
+
+        CompletableFuture<LLMResponse> requestFuture = executeWithRetry(prompt, params, providerId, 1);
+
+        return requestFuture.handle((response, throwable) -> {
+            if (throwable == null) {
+                recordSuccess();
+                cache.put(prompt, model, providerId, response);
+                LOGGER.debug("[{}] Request successful, cached response (latency: {}ms, tokens: {})",
+                    providerId, response.getLatencyMs(), response.getTokensUsed());
+                return response;
+            }
+
+            Throwable cause = unwrap(throwable);
+            recordFailure();
+            LOGGER.error("[{}] Request failed after retries, using fallback: {}",
+                providerId, cause.getMessage());
+            return fallbackHandler.generateFallback(prompt, cause);
+        }).whenComplete((response, throwable) -> bulkhead.release());
     }
 
-    /**
-     * Executes the request with all resilience patterns applied.
-     *
-     * @param prompt Request prompt
-     * @param params Request parameters
-     * @return CompletableFuture with response
-     */
-    private CompletableFuture<LLMResponse> executeWithResilience(String prompt, Map<String, Object> params) {
-        String providerId = delegate.getProviderId();
-        String model = (String) params.getOrDefault("model", "unknown");
+    private CompletableFuture<LLMResponse> executeWithRetry(String prompt, Map<String, Object> params,
+                                                           String providerId, int attempt) {
+        CompletableFuture<LLMResponse> result = new CompletableFuture<>();
+        attemptSend(prompt, params, providerId, attempt, result);
+        return result;
+    }
 
-        // Create supplier that wraps the async call
-        Supplier<CompletableFuture<LLMResponse>> asyncSupplier = () -> delegate.sendAsync(prompt, params);
+    private void attemptSend(String prompt, Map<String, Object> params, String providerId,
+                             int attempt, CompletableFuture<LLMResponse> result) {
+        if (result.isDone()) {
+            return;
+        }
 
-        // Apply resilience patterns in order: RateLimiter -> Bulkhead -> CircuitBreaker -> Retry
-        // Each decorator wraps the previous one
-        Supplier<CompletableFuture<LLMResponse>> decoratedSupplier = decorateWithResilience(asyncSupplier);
+        delegate.sendAsync(prompt, params).whenComplete((response, throwable) -> {
+            if (throwable == null) {
+                result.complete(response);
+                return;
+            }
 
-        try {
-            return decoratedSupplier.get()
-                .thenApply(response -> {
-                    // Cache successful response
-                    cache.put(prompt, model, providerId, response);
-                    LOGGER.debug("[{}] Request successful, cached response (latency: {}ms, tokens: {})",
-                        providerId, response.getLatencyMs(), response.getTokensUsed());
-                    return response;
-                })
-                .exceptionally(throwable -> {
-                    // Unwrap CompletionException if needed
-                    Throwable cause = throwable instanceof CompletionException ?
-                        throwable.getCause() : throwable;
+            Throwable cause = unwrap(throwable);
+            int maxAttempts = ResilienceConfig.getRetryMaxAttempts();
+            boolean retryable = isRetryable(cause);
 
-                    LOGGER.error("[{}] Request failed after all retries, using fallback: {}",
-                        providerId, cause.getMessage());
+            if (attempt < maxAttempts && retryable) {
+                long delayMs = ResilienceConfig.getRetryBackoffMillis(attempt);
+                LOGGER.warn("[{}] Retry attempt {} of {} after {}ms (reason: {})",
+                    providerId, attempt + 1, maxAttempts, delayMs,
+                    cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName());
+                CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS)
+                    .execute(() -> attemptSend(prompt, params, providerId, attempt + 1, result));
+            } else {
+                result.completeExceptionally(cause);
+            }
+        });
+    }
 
-                    // Generate fallback response
-                    return fallbackHandler.generateFallback(prompt, cause);
-                });
+    private boolean isRetryable(Throwable throwable) {
+        if (throwable instanceof LLMException) {
+            return ((LLMException) throwable).isRetryable();
+        }
+        if (throwable instanceof IOException) {
+            return true;
+        }
+        return throwable instanceof java.util.concurrent.TimeoutException;
+    }
 
-        } catch (Exception e) {
-            // Handle synchronous exceptions from rate limiter/bulkhead
-            LOGGER.error("[{}] Request rejected by resilience layer: {}", providerId, e.getMessage());
-            return CompletableFuture.completedFuture(fallbackHandler.generateFallback(prompt, e));
+    private boolean tryAcquireRateLimit() {
+        long now = System.currentTimeMillis();
+        long cutoff = now - TimeUnit.MINUTES.toMillis(1);
+
+        synchronized (rateLock) {
+            while (!rateWindow.isEmpty() && rateWindow.peekFirst() < cutoff) {
+                rateWindow.removeFirst();
+            }
+
+            if (rateWindow.size() >= ResilienceConfig.getRateLimitPerMinute()) {
+                return false;
+            }
+
+            rateWindow.addLast(now);
+            return true;
         }
     }
 
-    /**
-     * Decorates the supplier with all resilience patterns.
-     *
-     * <p><b>Order of decoration (innermost to outermost):</b></p>
-     * <ol>
-     *   <li>Retry (innermost) - retries on failure</li>
-     *   <li>Circuit Breaker - fails fast if circuit is open</li>
-     *   <li>Bulkhead - limits concurrent calls</li>
-     *   <li>Rate Limiter (outermost) - limits call rate</li>
-     * </ol>
-     *
-     * @param supplier Original supplier
-     * @return Decorated supplier
-     */
-    private Supplier<CompletableFuture<LLMResponse>> decorateWithResilience(
-            Supplier<CompletableFuture<LLMResponse>> supplier) {
+    private boolean allowRequest() {
+        synchronized (circuitLock) {
+            long now = System.currentTimeMillis();
+            if (circuitState == CircuitState.OPEN) {
+                if (now >= circuitOpenUntilMs) {
+                    transitionToHalfOpenLocked();
+                } else {
+                    return false;
+                }
+            }
 
-        // Apply Retry
-        Supplier<CompletableFuture<LLMResponse>> withRetry = Retry.decorateSupplier(retry, supplier);
+            if (circuitState == CircuitState.HALF_OPEN) {
+                if (halfOpenAttempts >= ResilienceConfig.getCircuitBreakerHalfOpenCalls()) {
+                    return false;
+                }
+                halfOpenAttempts++;
+            }
 
-        // Apply Circuit Breaker
-        Supplier<CompletableFuture<LLMResponse>> withCircuitBreaker =
-            CircuitBreaker.decorateSupplier(circuitBreaker, withRetry);
+            return true;
+        }
+    }
 
-        // Apply Bulkhead
-        Supplier<CompletableFuture<LLMResponse>> withBulkhead =
-            Bulkhead.decorateSupplier(bulkhead, withCircuitBreaker);
+    private void recordSuccess() {
+        synchronized (circuitLock) {
+            recordOutcomeLocked(true);
 
-        // Apply Rate Limiter
-        Supplier<CompletableFuture<LLMResponse>> withRateLimiter =
-            RateLimiter.decorateSupplier(rateLimiter, withBulkhead);
+            if (circuitState == CircuitState.HALF_OPEN) {
+                if (halfOpenAttempts >= ResilienceConfig.getCircuitBreakerHalfOpenCalls()
+                    && halfOpenFailures == 0) {
+                    closeCircuitLocked();
+                }
+            }
+        }
+    }
 
-        return withRateLimiter;
+    private void recordFailure() {
+        synchronized (circuitLock) {
+            recordOutcomeLocked(false);
+
+            if (circuitState == CircuitState.HALF_OPEN) {
+                halfOpenFailures++;
+                openCircuitLocked("half-open failure");
+                return;
+            }
+
+            if (circuitState == CircuitState.CLOSED && outcomeCount >= outcomeWindow.length) {
+                float failureRate = (failureCount * 100.0f) / outcomeCount;
+                if (failureRate >= ResilienceConfig.getCircuitBreakerFailureRateThreshold()) {
+                    openCircuitLocked("failure rate " + failureRate + "%");
+                }
+            }
+        }
+    }
+
+    private void recordOutcomeLocked(boolean success) {
+        int value = success ? 0 : 1;
+        if (outcomeCount < outcomeWindow.length) {
+            outcomeWindow[outcomeIndex] = value;
+            outcomeCount++;
+            if (value == 1) {
+                failureCount++;
+            }
+        } else {
+            int old = outcomeWindow[outcomeIndex];
+            if (old == 1) {
+                failureCount--;
+            }
+            outcomeWindow[outcomeIndex] = value;
+            if (value == 1) {
+                failureCount++;
+            }
+        }
+
+        outcomeIndex = (outcomeIndex + 1) % outcomeWindow.length;
+    }
+
+    private void openCircuitLocked(String reason) {
+        circuitState = CircuitState.OPEN;
+        circuitOpenUntilMs = System.currentTimeMillis() + ResilienceConfig.getCircuitBreakerWaitDurationMillis();
+        halfOpenAttempts = 0;
+        halfOpenFailures = 0;
+        LOGGER.warn("[{}] Circuit breaker OPEN ({})", delegate.getProviderId(), reason);
+    }
+
+    private void transitionToHalfOpenLocked() {
+        circuitState = CircuitState.HALF_OPEN;
+        halfOpenAttempts = 0;
+        halfOpenFailures = 0;
+        LOGGER.warn("[{}] Circuit breaker HALF_OPEN", delegate.getProviderId());
+    }
+
+    private void closeCircuitLocked() {
+        circuitState = CircuitState.CLOSED;
+        outcomeIndex = 0;
+        outcomeCount = 0;
+        failureCount = 0;
+        for (int i = 0; i < outcomeWindow.length; i++) {
+            outcomeWindow[i] = 0;
+        }
+        LOGGER.info("[{}] Circuit breaker CLOSED", delegate.getProviderId());
+    }
+
+    private Throwable unwrap(Throwable throwable) {
+        if (throwable instanceof CompletionException && throwable.getCause() != null) {
+            return throwable.getCause();
+        }
+        return throwable;
     }
 
     @Override
@@ -274,44 +414,39 @@ public class ResilientLLMClient implements AsyncLLMClient {
 
     @Override
     public boolean isHealthy() {
-        // Client is healthy if circuit breaker is not OPEN
-        return circuitBreaker.getState() != CircuitBreaker.State.OPEN;
+        synchronized (circuitLock) {
+            return circuitState != CircuitState.OPEN;
+        }
     }
 
-    /**
-     * Returns the current circuit breaker state.
-     *
-     * @return Circuit breaker state (CLOSED, OPEN, or HALF_OPEN)
-     */
-    public CircuitBreaker.State getCircuitBreakerState() {
-        return circuitBreaker.getState();
+    public CircuitState getCircuitBreakerState() {
+        synchronized (circuitLock) {
+            return circuitState;
+        }
     }
 
-    /**
-     * Returns the circuit breaker metrics.
-     *
-     * @return Circuit breaker metrics (failure rate, call counts, etc.)
-     */
-    public CircuitBreaker.Metrics getCircuitBreakerMetrics() {
-        return circuitBreaker.getMetrics();
+    public CircuitMetrics getCircuitBreakerMetrics() {
+        synchronized (circuitLock) {
+            float failureRate = outcomeCount == 0 ? 0.0f : (failureCount * 100.0f) / outcomeCount;
+            return new CircuitMetrics(circuitState, outcomeWindow.length, outcomeCount, failureCount, failureRate,
+                circuitOpenUntilMs);
+        }
     }
 
-    /**
-     * Returns the rate limiter metrics.
-     *
-     * @return Rate limiter metrics (available permissions, waiting threads)
-     */
-    public RateLimiter.Metrics getRateLimiterMetrics() {
-        return rateLimiter.getMetrics();
+    public RateLimiterMetrics getRateLimiterMetrics() {
+        long now = System.currentTimeMillis();
+        long cutoff = now - TimeUnit.MINUTES.toMillis(1);
+        synchronized (rateLock) {
+            while (!rateWindow.isEmpty() && rateWindow.peekFirst() < cutoff) {
+                rateWindow.removeFirst();
+            }
+            long resetAt = rateWindow.isEmpty() ? now : rateWindow.peekFirst() + TimeUnit.MINUTES.toMillis(1);
+            return new RateLimiterMetrics(ResilienceConfig.getRateLimitPerMinute(), rateWindow.size(), resetAt);
+        }
     }
 
-    /**
-     * Returns the bulkhead metrics.
-     *
-     * @return Bulkhead metrics (available concurrent calls, max allowed)
-     */
-    public Bulkhead.Metrics getBulkheadMetrics() {
-        return bulkhead.getMetrics();
+    public BulkheadMetrics getBulkheadMetrics() {
+        return new BulkheadMetrics(ResilienceConfig.getBulkheadMaxConcurrentCalls(), bulkhead.availablePermits());
     }
 
     /**
@@ -320,7 +455,8 @@ public class ResilientLLMClient implements AsyncLLMClient {
      * <p><b>Warning:</b> Use with caution. Only for testing or manual recovery.</p>
      */
     public void resetCircuitBreaker() {
-        circuitBreaker.reset();
-        LOGGER.info("[{}] Circuit breaker manually reset to CLOSED", delegate.getProviderId());
+        synchronized (circuitLock) {
+            closeCircuitLocked();
+        }
     }
 }

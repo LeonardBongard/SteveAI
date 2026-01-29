@@ -3,7 +3,6 @@ plugins {
     id 'idea'
     id 'maven-publish'
     id 'net.minecraftforge.gradle' version '[6.0,6.2)'
-    id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
 version = '1.0.0'
@@ -50,48 +49,77 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 repositories {
     mavenCentral()
 }
-
 dependencies {
-    minecraft 'net.minecraftforge:forge:1.20.1-47.2.0'
-
-    // HTTP client - Using Java 11+ built-in HttpClient (no external dependencies needed!)
-    // JSON parsing - Minecraft already includes Gson
-
-    // GraalVM for JavaScript code execution engine
-    // Using jarJar for Forge-native dependency bundling (jar-in-jar)
-    implementation 'org.graalvm.polyglot:polyglot:23.1.0'
-    implementation 'org.graalvm.polyglot:js:23.1.0'
-    jarJar 'org.graalvm.polyglot:polyglot:23.1.0'
-    jarJar 'org.graalvm.polyglot:js:23.1.0'
-
-    // Resilience4j for fault tolerance (circuit breaker, retry, rate limiting, bulkhead)
-    implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
-    implementation 'io.github.resilience4j:resilience4j-retry:2.1.0'
-    implementation 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
-    implementation 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
-    jarJar 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
-    jarJar 'io.github.resilience4j:resilience4j-retry:2.1.0'
-    jarJar 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
-    jarJar 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
-
-    // Caffeine cache for LLM response caching
-    implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
-    jarJar 'com.github.ben-manes.caffeine:caffeine:3.1.8'
-
-    // Apache Commons for SHA-256 hashing (cache keys)
-    implementation 'commons-codec:commons-codec:1.16.0'
-    jarJar 'commons-codec:commons-codec:1.16.0'
+    minecraft 'net.minecraftforge:forge:1.20.1-47.4.10'
 
     // JUnit 5 for testing
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.9.3'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.9.3'
 }
 
+// dependencies {
+//     minecraft 'net.minecraftforge:forge:1.20.1-47.2.0'
+
+//     // HTTP client - Using Java 11+ built-in HttpClient (no external dependencies needed!)
+//     // JSON parsing - Minecraft already includes Gson
+
+//     // GraalVM for JavaScript code execution engine
+//     // Using jarJar for Forge-native dependency bundling (jar-in-jar)
+//     implementation 'org.graalvm.polyglot:polyglot:23.1.0'
+//     implementation 'org.graalvm.polyglot:js:23.1.0'
+//     // jarJar 'org.graalvm.polyglot:polyglot:23.1.0'
+//     // jarJar 'org.graalvm.polyglot:js:23.1.0'
+//     jarJar 'org.graalvm.polyglot:polyglot:[23.1.0,23.2.0)'
+//     jarJar 'org.graalvm.polyglot:js:[23.1.0,23.2.0)'
+//     // Resilience4j for fault tolerance (circuit breaker, retry, rate limiting, bulkhead)
+//     implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
+//     implementation 'io.github.resilience4j:resilience4j-retry:2.1.0'
+//     implementation 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
+//     implementation 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
+//     jarJar 'io.github.resilience4j:resilience4j-circuitbreaker:2.1.0'
+//     jarJar 'io.github.resilience4j:resilience4j-retry:2.1.0'
+//     jarJar 'io.github.resilience4j:resilience4j-ratelimiter:2.1.0'
+//     jarJar 'io.github.resilience4j:resilience4j-bulkhead:2.1.0'
+
+//     // Caffeine cache for LLM response caching
+//     implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+//     jarJar 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+
+//     // Apache Commons for SHA-256 hashing (cache keys)
+//     implementation 'commons-codec:commons-codec:1.16.0'
+//     jarJar 'commons-codec:commons-codec:1.16.0'
+
+//     // JUnit 5 for testing
+//     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.9.3'
+//     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.9.3'
+// }
+
 test {
     useJUnitPlatform()
 }
 
+// tasks.named('jar', Jar).configure {
+//     manifest {
+//         attributes([
+//             'Specification-Title': 'Steve AI Mod',
+//             'Specification-Vendor': 'Steve AI',
+//             'Specification-Version': '1',
+//             'Implementation-Title': project.name,
+//             'Implementation-Version': project.jar.archiveVersion,
+//             'Implementation-Vendor': 'Steve AI'
+//         ])
+//     }
+
+//     // Exclude unused Java 9+ versioned modules from non-shadowed jar
+//     exclude 'META-INF/versions/**'
+// }
 tasks.named('jar', Jar).configure {
+    if (project.hasProperty("noJarJar") && project.property("noJarJar").toString().toBoolean()) {
+        jarJar.disable()
+    } else {
+        jarJar.enable()
+    }
+
     manifest {
         attributes([
             'Specification-Title': 'Steve AI Mod',
@@ -103,37 +131,18 @@ tasks.named('jar', Jar).configure {
         ])
     }
 
-    // Exclude unused Java 9+ versioned modules from non-shadowed jar
     exclude 'META-INF/versions/**'
+    // Prevent Forge from trying to load POMs as jar-in-jar dependencies
+    exclude 'META-INF/jarjar/*.pom'
 }
 
-// Shadow jar configuration - DISABLED
-// We switched from ShadowJar to jarJar for Forge-native dependency bundling.
-// jarJar integrates better with ForgeGradle and the reobfJar process,
-// embedding dependencies as jar-in-jar (META-INF/jarjar/) instead of a fat jar.
-// This resolves classloading and mapping issues with Forge 1.20.1.
-// 
-// The Shadow plugin is kept in the plugins block but unused.
-// If you want to re-enable Shadow, uncomment the block below and replace jarJar
-// declarations with shadow declarations in the dependencies block.
-// shadowJar {
-//     configurations = [project.configurations.shadow]
-//     archiveClassifier.set('all')
-//     
-//     // Exclude unused Java 9+ versioned modules to reduce jar size
-//     exclude 'META-INF/versions/**'
-//     
-//     // Relocate packages to avoid conflicts
-//     relocate 'com.github.benmanes.caffeine', 'com.steve.ai.shaded.caffeine'
-//     relocate 'org.apache.commons.codec', 'com.steve.ai.shaded.codec'
-//     relocate 'io.github.resilience4j', 'com.steve.ai.shaded.resilience4j'
-//     relocate 'org.graalvm.polyglot', 'com.steve.ai.shaded.graalvm'
-//     
-//     // Don't minimize - these libraries use reflection and dynamic loading
-//     // minimize() can break GraalVM and Resilience4j at runtime
-//
-//     finalizedBy 'reobfJar'
-// }
+tasks.named('jarJar', net.minecraftforge.gradle.userdev.tasks.JarJar).configure {
+    // Prevent Forge from trying to load POMs as jar-in-jar dependencies
+    exclude 'META-INF/jarjar/*.pom'
+    onlyIf {
+        !(project.hasProperty("noJarJar") && project.property("noJarJar").toString().toBoolean())
+    }
+}
 
 publishing {
     publications {
@@ -147,4 +156,3 @@ publishing {
         }
     }
 }
-

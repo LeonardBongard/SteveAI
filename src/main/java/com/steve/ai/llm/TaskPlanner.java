@@ -28,6 +28,9 @@ public class TaskPlanner {
     private final LLMCache llmCache;
     private final LLMFallbackHandler fallbackHandler;
 
+    private static final String GROQ_DEFAULT_MODEL = "llama-3.1-8b-instant";
+    private static final String GEMINI_DEFAULT_MODEL = "gemini-1.5-flash";
+
     public TaskPlanner() {
         // Legacy clients
         this.openAIClient = new OpenAIClient();
@@ -47,8 +50,8 @@ public class TaskPlanner {
 
         // Create base async clients
         AsyncLLMClient baseOpenAI = new AsyncOpenAIClient(apiKey, model, maxTokens, temperature);
-        AsyncLLMClient baseGroq = new AsyncGroqClient(apiKey, "llama-3.1-8b-instant", 500, temperature);
-        AsyncLLMClient baseGemini = new AsyncGeminiClient(apiKey, "gemini-1.5-flash", maxTokens, temperature);
+        AsyncLLMClient baseGroq = new AsyncGroqClient(apiKey, GROQ_DEFAULT_MODEL, 500, temperature);
+        AsyncLLMClient baseGemini = new AsyncGeminiClient(apiKey, GEMINI_DEFAULT_MODEL, maxTokens, temperature);
         AsyncLLMClient baseOllama = new AsyncOllamaClient(
             SteveConfig.OLLAMA_BASE_URL.get(),
             SteveConfig.OLLAMA_API_KEY.get(),
@@ -143,9 +146,11 @@ public class TaskPlanner {
                 steve.getSteveName(), provider, command);
 
             // Build params map
+            String model = getModelForProvider(provider);
+
             Map<String, Object> params = Map.of(
                 "systemPrompt", systemPrompt,
-                "model", SteveConfig.OPENAI_MODEL.get(),
+                "model", model,
                 "maxTokens", SteveConfig.MAX_TOKENS.get(),
                 "temperature", SteveConfig.TEMPERATURE.get()
             );
@@ -207,6 +212,16 @@ public class TaskPlanner {
         };
     }
 
+    private String getModelForProvider(String provider) {
+        return switch (provider) {
+            case "ollama" -> SteveConfig.OLLAMA_MODEL.get();
+            case "groq" -> GROQ_DEFAULT_MODEL;
+            case "gemini" -> GEMINI_DEFAULT_MODEL;
+            case "openai" -> SteveConfig.OPENAI_MODEL.get();
+            default -> SteveConfig.OPENAI_MODEL.get();
+        };
+    }
+
     /**
      * Returns the LLM cache for monitoring.
      *
@@ -251,4 +266,3 @@ public class TaskPlanner {
             .toList();
     }
 }
-

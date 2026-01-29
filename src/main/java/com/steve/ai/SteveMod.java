@@ -27,6 +27,10 @@ public class SteveMod {
     public static final String MODID = "steve";
     public static final Logger LOGGER = LogUtils.getLogger();
 
+    static {
+        LOGGER.info("SteveMod class loaded");
+    }
+
     public static final DeferredRegister<EntityType<?>> ENTITIES = 
         DeferredRegister.create(ForgeRegistries.ENTITY_TYPES, MODID);
 
@@ -39,6 +43,7 @@ public class SteveMod {
     private static SteveManager steveManager;
 
     public SteveMod() {
+        LOGGER.info("SteveMod constructor start");
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
 
         ENTITIES.register(modEventBus);
@@ -51,22 +56,28 @@ public class SteveMod {
         MinecraftForge.EVENT_BUS.register(this);
         
         if (net.minecraftforge.fml.loading.FMLEnvironment.dist.isClient()) {
-            MinecraftForge.EVENT_BUS.register(com.steve.ai.client.SteveGUI.class);        }
+            MinecraftForge.EVENT_BUS.register(com.steve.ai.client.SteveGUI.class);
+        }
         
         steveManager = new SteveManager();
+        LOGGER.info("SteveMod constructor complete");
     }
 
-    private void commonSetup(final FMLCommonSetupEvent event) {    }
+    private void commonSetup(final FMLCommonSetupEvent event) {
+        LOGGER.info("SteveMod common setup");
+    }
 
     private void entityAttributes(EntityAttributeCreationEvent event) {
         event.put(STEVE_ENTITY.get(), SteveEntity.createAttributes().build());
     }
 
     @SubscribeEvent
-    public void onCommandRegister(RegisterCommandsEvent event) {        SteveCommands.register(event.getDispatcher());    }
+    public void onCommandRegister(RegisterCommandsEvent event) {
+        LOGGER.info("SteveMod registering commands");
+        SteveCommands.register(event.getDispatcher());
+    }
 
     public static SteveManager getSteveManager() {
         return steveManager;
     }
 }
-

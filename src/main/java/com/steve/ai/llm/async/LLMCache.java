@@ -1,17 +1,19 @@
 package com.steve.ai.llm.async;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.stats.CacheStats;
-import org.apache.commons.codec.digest.DigestUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /**
- * LRU cache for LLM responses using Caffeine.
+ * LRU cache for LLM responses using a lightweight in-memory map.
  *
  * <p>Caches LLM responses to reduce API calls and costs. Cache key is a SHA-256 hash
  * of the combination of provider, model, and prompt.</p>
@@ -21,7 +23,7 @@ import java.util.concurrent.TimeUnit;
  *   <li>Maximum size: 500 entries (~25MB estimated)</li>
  *   <li>TTL: 5 minutes (expireAfterWrite)</li>
  *   <li>Eviction: LRU (Least Recently Used)</li>
- *   <li>Stats: Enabled for monitoring hit/miss rates</li>
+ *   <li>Stats: Lightweight counters for monitoring hit/miss rates</li>
  * </ul>
  *
  * <p><b>Performance Impact:</b></p>
@@ -31,7 +33,7 @@ import java.util.concurrent.TimeUnit;
  *   <li>Cost savings: $0.002 per 1K tokens saved</li>
  * </ul>
  *
- * <p><b>Thread Safety:</b> Caffeine is fully thread-safe</p>
+ * <p><b>Thread Safety:</b> All operations are synchronized</p>
  *
  * <p><b>Usage Example:</b></p>
  * <pre>
@@ -48,7 +50,7 @@ import java.util.concurrent.TimeUnit;
  * cache.put("user prompt", "gpt-3.5-turbo", "openai", response);
  *
  * // Monitor cache performance
- * CacheStats stats = cache.getStats();
+ * LLMCacheStats stats = cache.getStats();
  * double hitRate = stats.hitRate();
  * System.out.println("Cache hit rate: " + (hitRate * 100) + "%");
  * </pre>
@@ -61,8 +63,22 @@ public class LLMCache {
 
     private static final int MAX_CACHE_SIZE = 500;
     private static final int TTL_MINUTES = 5;
+    private static final long TTL_MILLIS = TimeUnit.MINUTES.toMillis(TTL_MINUTES);
 
-    private final Cache<String, LLMResponse> cache;
+    private final Object lock = new Object();
+    private final Map<String, CacheEntry> cache;
+
+    private long hitCount;
+    private long missCount;
+    private long evictionCount;
+
+    private static final ThreadLocal<MessageDigest> DIGEST = ThreadLocal.withInitial(() -> {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
+    });
 
     /**
      * Constructs a new LLMCache with default configuration.
@@ -71,17 +87,22 @@ public class LLMCache {
      * <ul>
      *   <li>500 entry maximum (LRU eviction)</li>
      *   <li>5 minute TTL</li>
-     *   <li>Statistics recording enabled</li>
+     *   <li>Statistics tracking enabled</li>
      * </ul>
      */
     public LLMCache() {
         LOGGER.info("Initializing LLM cache (max size: {}, TTL: {} minutes)", MAX_CACHE_SIZE, TTL_MINUTES);
 
-        this.cache = Caffeine.newBuilder()
-            .maximumSize(MAX_CACHE_SIZE)
-            .expireAfterWrite(TTL_MINUTES, TimeUnit.MINUTES)
-            .recordStats() // Enable hit/miss tracking
-            .build();
+        this.cache = new LinkedHashMap<String, CacheEntry>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, CacheEntry> eldest) {
+                boolean shouldEvict = size() > MAX_CACHE_SIZE;
+                if (shouldEvict) {
+                    evictionCount++;
+                }
+                return shouldEvict;
+            }
+        };
 
         LOGGER.info("LLM cache initialized successfully");
     }
@@ -98,17 +119,31 @@ public class LLMCache {
      */
     public Optional<LLMResponse> get(String prompt, String model, String providerId) {
         String key = generateKey(prompt, model, providerId);
-        LLMResponse cached = cache.getIfPresent(key);
+        long now = System.currentTimeMillis();
 
-        if (cached != null) {
+        synchronized (lock) {
+            CacheEntry entry = cache.get(key);
+            if (entry == null) {
+                missCount++;
+                LOGGER.debug("Cache MISS for provider={}, model={}, promptHash={}",
+                    providerId, model, key.substring(0, 8));
+                return Optional.empty();
+            }
+
+            if (isExpired(entry, now)) {
+                cache.remove(key);
+                missCount++;
+                evictionCount++;
+                LOGGER.debug("Cache EXPIRED for provider={}, model={}, promptHash={}",
+                    providerId, model, key.substring(0, 8));
+                return Optional.empty();
+            }
+
+            hitCount++;
             LOGGER.debug("Cache HIT for provider={}, model={}, promptHash={}",
                 providerId, model, key.substring(0, 8));
-        } else {
-            LOGGER.debug("Cache MISS for provider={}, model={}, promptHash={}",
-                providerId, model, key.substring(0, 8));
+            return Optional.of(entry.response);
         }
-
-        return Optional.ofNullable(cached);
     }
 
     /**
@@ -125,10 +160,14 @@ public class LLMCache {
      */
     public void put(String prompt, String model, String providerId, LLMResponse response) {
         String key = generateKey(prompt, model, providerId);
+        long now = System.currentTimeMillis();
 
-        // Mark response as cached
         LLMResponse cachedResponse = response.withCacheFlag(true);
-        cache.put(key, cachedResponse);
+
+        synchronized (lock) {
+            pruneExpiredLocked(now);
+            cache.put(key, new CacheEntry(cachedResponse, now));
+        }
 
         LOGGER.debug("Cached response for provider={}, model={}, promptHash={}, tokens={}",
             providerId, model, key.substring(0, 8), response.getTokensUsed());
@@ -154,45 +193,30 @@ public class LLMCache {
      */
     private String generateKey(String prompt, String model, String providerId) {
         String composite = providerId + ":" + model + ":" + prompt;
-        return DigestUtils.sha256Hex(composite);
+        byte[] digest = DIGEST.get().digest(composite.getBytes(StandardCharsets.UTF_8));
+        return toHex(digest);
     }
 
     /**
      * Returns cache statistics for monitoring.
      *
-     * <p><b>Available metrics:</b></p>
-     * <ul>
-     *   <li>{@code hitRate()}: Percentage of requests served from cache (0.0 - 1.0)</li>
-     *   <li>{@code missRate()}: Percentage of cache misses (0.0 - 1.0)</li>
-     *   <li>{@code hitCount()}: Total number of cache hits</li>
-     *   <li>{@code missCount()}: Total number of cache misses</li>
-     *   <li>{@code loadSuccessCount()}: Number of successful cache loads</li>
-     *   <li>{@code evictionCount()}: Number of evicted entries</li>
-     * </ul>
-     *
-     * <p><b>Example:</b></p>
-     * <pre>
-     * CacheStats stats = cache.getStats();
-     * LOGGER.info("Cache hit rate: {:.2f}%, {} hits, {} misses",
-     *     stats.hitRate() * 100, stats.hitCount(), stats.missCount());
-     * </pre>
-     *
      * @return Immutable snapshot of cache statistics
      */
-    public CacheStats getStats() {
-        return cache.stats();
+    public LLMCacheStats getStats() {
+        synchronized (lock) {
+            return new LLMCacheStats(hitCount, missCount, evictionCount, cache.size());
+        }
     }
 
     /**
      * Returns the approximate number of entries in the cache.
      *
-     * <p><b>Note:</b> This is an estimate and may not be exact due to
-     * concurrent modifications and pending cleanup operations.</p>
-     *
      * @return Approximate cache size
      */
     public long size() {
-        return cache.estimatedSize();
+        synchronized (lock) {
+            return cache.size();
+        }
     }
 
     /**
@@ -204,8 +228,11 @@ public class LLMCache {
      * result in cache misses and fresh API calls.</p>
      */
     public void clear() {
-        long sizeBefore = cache.estimatedSize();
-        cache.invalidateAll();
+        long sizeBefore;
+        synchronized (lock) {
+            sizeBefore = cache.size();
+            cache.clear();
+        }
         LOGGER.info("Cache cleared, removed ~{} entries", sizeBefore);
     }
 
@@ -215,14 +242,48 @@ public class LLMCache {
      * <p>Useful for periodic monitoring and debugging.</p>
      */
     public void logStats() {
-        CacheStats stats = getStats();
+        LLMCacheStats stats = getStats();
         LOGGER.info("LLM Cache Stats - Size: ~{}/{}, Hit Rate: {:.2f}%, Hits: {}, Misses: {}, Evictions: {}",
-            size(),
+            stats.size(),
             MAX_CACHE_SIZE,
             stats.hitRate() * 100,
             stats.hitCount(),
             stats.missCount(),
             stats.evictionCount()
         );
+    }
+
+    private boolean isExpired(CacheEntry entry, long now) {
+        return now - entry.createdAtMillis >= TTL_MILLIS;
+    }
+
+    private void pruneExpiredLocked(long now) {
+        Iterator<Map.Entry<String, CacheEntry>> iterator = cache.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, CacheEntry> entry = iterator.next();
+            if (isExpired(entry.getValue(), now)) {
+                iterator.remove();
+                evictionCount++;
+            }
+        }
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+            sb.append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
+    }
+
+    private static final class CacheEntry {
+        private final LLMResponse response;
+        private final long createdAtMillis;
+
+        private CacheEntry(LLMResponse response, long createdAtMillis) {
+            this.response = response;
+            this.createdAtMillis = createdAtMillis;
+        }
     }
 }
