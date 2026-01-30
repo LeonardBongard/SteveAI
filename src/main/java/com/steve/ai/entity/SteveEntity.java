@@ -69,6 +69,12 @@ public class SteveEntity extends PathfinderMob {
     @Override
     public void tick() {
         super.tick();
+        tickCounter++;
+
+        if (tickCounter % 5 == 0) {
+            long timestamp = this.level().getGameTime();
+            memory.recordViewSample(this.getYRot(), this.getXRot(), timestamp);
+        }
         
         if (!this.level().isClientSide()) {
             actionExecutor.tick();
