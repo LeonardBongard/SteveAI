@@ -7,13 +7,23 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.resources.Identifier;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.client.event.AddGuiOverlayLayersEvent;
 import net.minecraftforge.client.gui.overlay.ForgeLayeredDraw;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.AABB;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * Side-mounted GUI panel for Steve agent interaction.
@@ -49,6 +59,7 @@ public class SteveGUI {
     private static final int DEBUG_BG_COLOR = 0xAA000000;
     private static final int DEBUG_TEXT_COLOR = 0xFFE0E0E0;
     private static final int DEBUG_ACCENT_COLOR = 0xFF7CD2FF;
+    private static final long SNAPSHOT_REFRESH_MS = 1500L;
 
     private static class ChatMessage {
         String sender; // "You", "Steve", "Alex", "System", etc.
@@ -159,20 +170,48 @@ public class SteveGUI {
             mc.player.getBoundingBox().inflate(96)
         );
 
-        if (steves.isEmpty()) {
-            return;
-        }
+        steves.sort(Comparator.comparing(SteveEntity::getSteveName, String.CASE_INSENSITIVE_ORDER));
+        cachedDebugSteves = new ArrayList<>(steves);
 
         List<String> lines = new ArrayList<>();
         lines.add("Steve Debug");
+        if (steves.isEmpty()) {
+            lines.add("No active Steves");
+        } else {
+            SteveEntity selectedSteve = resolveSelectedSteve(steves);
+            String selectedName = selectedSteve.getSteveName();
+            int selectedIndex = Math.max(0, selectedSteveIndex);
+            String selectorLine = "Select: < " + selectedName + " > (" + (selectedIndex + 1) + "/" + steves.size() + ")";
+            lines.add(selectorLine);
+            lines.add("Alt+←/→ to cycle");
+
+            long nowMs = System.currentTimeMillis();
+            if (selectedSteve == null || shouldRefreshSnapshot(selectedSteve, nowMs)) {
+                visibleBlockSnapshot = buildVisibleBlockSnapshot(selectedSteve);
+                lastSnapshotUpdateMs = nowMs;
+                lastSnapshotSteveId = selectedSteve != null ? selectedSteve.getUUID() : null;
+            }
+
+            String updateAge = formatUpdateAge(nowMs, lastSnapshotUpdateMs);
+            String shortUuid = selectedSteve != null ? shortUuid(selectedSteve.getUUID()) : "n/a";
+            lines.add("Selected: " + selectedName + " [" + shortUuid + "] • Updated: " + updateAge);
+
+            String snapshotLine = "Visible blocks: " + visibleBlockSnapshot;
+            lines.addAll(wrapDebugLine(mc.font, snapshotLine, 220));
+        }
+
         int maxLines = 5;
         int count = 0;
-        for (SteveEntity steve : steves) {
-            if (count >= maxLines) break;
-            String name = steve.getSteveName();
-            String status = steve.getDebugStatus();
-            if (status == null || status.isBlank()) {
-                status = "Idle";
+        if (!steves.isEmpty()) {
+            for (SteveEntity steve : steves) {
+                if (count >= maxLines) break;
+                String name = steve.getSteveName();
+                String status = steve.getDebugStatus();
+                if (status == null || status.isBlank()) {
+                    status = "Idle";
+                }
+                lines.add(name + ": " + status);
+                count++;
             }
             lines.add(name + ": " + status);
             if (SteveConfig.ENABLE_VIEW_COVERAGE_OVERLAY.get()) {
@@ -359,6 +398,10 @@ public class SteveGUI {
     public static boolean handleKeyPress(int keyCode, int scanCode, int modifiers) {
         if (!isOpen || inputBox == null) return false;
 
+        if (handleDebugSelectorKeys(keyCode)) {
+            return true;
+        }
+
         Minecraft mc = Minecraft.getInstance();
         
         // Escape key - close panel
@@ -482,14 +525,21 @@ public class SteveGUI {
         List<String> targetSteves = parseTargetSteves(command);
         
         if (targetSteves.isEmpty()) {
-            var steves = SteveMod.getSteveManager().getAllSteves();
-            if (!steves.isEmpty()) {
-                targetSteves.add(steves.iterator().next().getSteveName());
-            } else {
-                // No Steves available
-                addSystemMessage("No Steve agents found! Use 'spawn <name>' to create one.");
-                return;
+            SteveEntity nearestSteve = getNearestClientSteve(mc);
+            if (nearestSteve != null) {
+                targetSteves.add(nearestSteve.getSteveName());
+            } else if (mc.hasSingleplayerServer()) {
+                var steves = SteveMod.getSteveManager().getAllSteves();
+                if (!steves.isEmpty()) {
+                    targetSteves.add(steves.iterator().next().getSteveName());
+                }
             }
+        }
+
+        if (targetSteves.isEmpty()) {
+            // No Steves available
+            addSystemMessage("No Steve agents found! Use 'spawn <name>' to create one.");
+            return;
         }
 
         // Send command to all targeted Steves
@@ -509,20 +559,32 @@ public class SteveGUI {
     private static List<String> parseTargetSteves(String command) {
         List<String> targets = new ArrayList<>();
         String commandLower = command.toLowerCase();
+        Minecraft mc = Minecraft.getInstance();
+        List<SteveEntity> clientSteves = getClientSteves(mc);
         
         if (commandLower.startsWith("all steves ") || commandLower.startsWith("all ") || 
             commandLower.startsWith("everyone ") || commandLower.startsWith("everybody ")) {
-            var allSteves = SteveMod.getSteveManager().getAllSteves();
-            for (SteveEntity steve : allSteves) {
+            for (SteveEntity steve : clientSteves) {
                 targets.add(steve.getSteveName());
+            }
+            if (targets.isEmpty() && mc.hasSingleplayerServer()) {
+                var allSteves = SteveMod.getSteveManager().getAllSteves();
+                for (SteveEntity steve : allSteves) {
+                    targets.add(steve.getSteveName());
+                }
             }
             return targets;
         }
         
-        var allSteves = SteveMod.getSteveManager().getAllSteves();
         List<String> availableNames = new ArrayList<>();
-        for (SteveEntity steve : allSteves) {
+        for (SteveEntity steve : clientSteves) {
             availableNames.add(steve.getSteveName().toLowerCase());
+        }
+        if (availableNames.isEmpty() && mc.hasSingleplayerServer()) {
+            var allSteves = SteveMod.getSteveManager().getAllSteves();
+            for (SteveEntity steve : allSteves) {
+                availableNames.add(steve.getSteveName().toLowerCase());
+            }
         }
         
         String[] parts = command.split(",");
@@ -531,16 +593,57 @@ public class SteveGUI {
             String firstWord = trimmed.split(" ")[0].toLowerCase();
             
             if (availableNames.contains(firstWord)) {
-                for (SteveEntity steve : allSteves) {
-                    if (steve.getSteveName().equalsIgnoreCase(firstWord)) {
-                        targets.add(steve.getSteveName());
-                        break;
-                    }
+                String matchedName = resolveSteveName(clientSteves, firstWord);
+                if (matchedName == null && mc.hasSingleplayerServer()) {
+                    var allSteves = SteveMod.getSteveManager().getAllSteves();
+                    matchedName = resolveSteveName(allSteves, firstWord);
+                }
+                if (matchedName != null) {
+                    targets.add(matchedName);
                 }
             }
         }
         
         return targets;
+    }
+
+    private static List<SteveEntity> getClientSteves(Minecraft mc) {
+        if (mc.level == null || mc.player == null) {
+            return List.of();
+        }
+        AABB searchBox = getClientViewRange(mc);
+        return mc.level.getEntitiesOfClass(SteveEntity.class, searchBox);
+    }
+
+    private static AABB getClientViewRange(Minecraft mc) {
+        int viewDistance = mc.options.getEffectiveRenderDistance();
+        double range = Math.max(16.0, viewDistance * 16.0);
+        return mc.player.getBoundingBox().inflate(range);
+    }
+
+    private static SteveEntity getNearestClientSteve(Minecraft mc) {
+        if (mc.player == null) {
+            return null;
+        }
+        SteveEntity nearest = null;
+        double nearestDistance = Double.MAX_VALUE;
+        for (SteveEntity steve : getClientSteves(mc)) {
+            double distance = mc.player.distanceToSqr(steve);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearest = steve;
+            }
+        }
+        return nearest;
+    }
+
+    private static String resolveSteveName(Iterable<SteveEntity> steves, String targetName) {
+        for (SteveEntity steve : steves) {
+            if (steve.getSteveName().equalsIgnoreCase(targetName)) {
+                return steve.getSteveName();
+            }
+        }
+        return null;
     }
 
     public static void tick() {
@@ -550,5 +653,195 @@ public class SteveGUI {
                 inputBox.setFocused(true);
             }
         }
+    }
+
+    private static List<SteveEntity> cachedDebugSteves = new ArrayList<>();
+    private static UUID selectedSteveId;
+    private static int selectedSteveIndex = 0;
+    private static UUID lastSnapshotSteveId;
+    private static String visibleBlockSnapshot = "none";
+    private static long lastSnapshotUpdateMs = 0L;
+
+    private static boolean handleDebugSelectorKeys(int keyCode) {
+        if (!SteveConfig.ENABLE_DEBUG_OVERLAY.get()) {
+            return false;
+        }
+        if (!Screen.hasAltDown()) {
+            return false;
+        }
+        if (keyCode == 263) { // Left
+            cycleSelectedSteve(-1);
+            return true;
+        }
+        if (keyCode == 262) { // Right
+            cycleSelectedSteve(1);
+            return true;
+        }
+        return false;
+    }
+
+    private static void cycleSelectedSteve(int direction) {
+        if (cachedDebugSteves.isEmpty()) {
+            selectedSteveId = null;
+            selectedSteveIndex = 0;
+            return;
+        }
+
+        int currentIndex = 0;
+        if (selectedSteveId != null) {
+            for (int i = 0; i < cachedDebugSteves.size(); i++) {
+                if (cachedDebugSteves.get(i).getUUID().equals(selectedSteveId)) {
+                    currentIndex = i;
+                    break;
+                }
+            }
+        }
+        int nextIndex = (currentIndex + direction + cachedDebugSteves.size()) % cachedDebugSteves.size();
+        SteveEntity nextSteve = cachedDebugSteves.get(nextIndex);
+        selectedSteveId = nextSteve.getUUID();
+        selectedSteveIndex = nextIndex;
+        lastSnapshotUpdateMs = 0L;
+    }
+
+    private static SteveEntity resolveSelectedSteve(List<SteveEntity> steves) {
+        if (steves.isEmpty()) {
+            selectedSteveId = null;
+            selectedSteveIndex = 0;
+            return null;
+        }
+
+        if (selectedSteveId != null) {
+            for (int i = 0; i < steves.size(); i++) {
+                SteveEntity steve = steves.get(i);
+                if (steve.getUUID().equals(selectedSteveId)) {
+                    selectedSteveIndex = i;
+                    return steve;
+                }
+            }
+        }
+
+        SteveEntity fallback = steves.get(0);
+        selectedSteveId = fallback.getUUID();
+        selectedSteveIndex = 0;
+        return fallback;
+    }
+
+    private static boolean shouldRefreshSnapshot(SteveEntity steve, long nowMs) {
+        if (steve == null) {
+            return false;
+        }
+        if (lastSnapshotUpdateMs == 0L) {
+            return true;
+        }
+        if (lastSnapshotSteveId == null || !lastSnapshotSteveId.equals(steve.getUUID())) {
+            return true;
+        }
+        return nowMs - lastSnapshotUpdateMs >= SNAPSHOT_REFRESH_MS;
+    }
+
+    private static String buildVisibleBlockSnapshot(SteveEntity steve) {
+        if (steve == null) {
+            return "none";
+        }
+        Level level = steve.level();
+        Vec3 eye = steve.getEyePosition();
+        Vec3 look = steve.getLookAngle().normalize();
+        Vec3 up = new Vec3(0, 1, 0);
+        Vec3 right = look.cross(up);
+        if (right.lengthSqr() < 1.0E-4) {
+            right = new Vec3(1, 0, 0);
+        }
+        right = right.normalize();
+        Vec3 trueUp = right.cross(look).normalize();
+
+        double[] offsets = {-0.2, 0.0, 0.2};
+        int range = 16;
+        Set<String> visibleBlocks = new LinkedHashSet<>();
+        for (double xOffset : offsets) {
+            for (double yOffset : offsets) {
+                Vec3 direction = look.add(right.scale(xOffset)).add(trueUp.scale(yOffset)).normalize();
+                for (int distance = 1; distance <= range; distance++) {
+                    Vec3 sample = eye.add(direction.scale(distance));
+                    BlockPos pos = BlockPos.containing(sample);
+                    BlockState state = level.getBlockState(pos);
+                    if (!state.isAir()) {
+                        visibleBlocks.add(state.getBlock().getName().getString());
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (visibleBlocks.isEmpty()) {
+            return "none";
+        }
+
+        StringBuilder summary = new StringBuilder();
+        int count = 0;
+        for (String name : visibleBlocks) {
+            if (count > 0) {
+                summary.append(", ");
+            }
+            summary.append(name);
+            count++;
+            if (count >= 6) {
+                break;
+            }
+        }
+        return summary.toString();
+    }
+
+    private static String formatUpdateAge(long nowMs, long updateMs) {
+        if (updateMs <= 0L) {
+            return "never";
+        }
+        long deltaMs = Math.max(0L, nowMs - updateMs);
+        if (deltaMs < 1000L) {
+            return deltaMs + "ms ago";
+        }
+        double seconds = deltaMs / 1000.0;
+        if (seconds < 60.0) {
+            return String.format("%.1fs ago", seconds);
+        }
+        double minutes = seconds / 60.0;
+        return String.format("%.1fm ago", minutes);
+    }
+
+    private static String shortUuid(UUID uuid) {
+        if (uuid == null) {
+            return "n/a";
+        }
+        String raw = uuid.toString();
+        int dash = raw.indexOf('-');
+        return dash > 0 ? raw.substring(0, dash) : raw;
+    }
+
+    private static List<String> wrapDebugLine(net.minecraft.client.gui.Font font, String line, int maxWidth) {
+        List<String> wrapped = new ArrayList<>();
+        if (font.width(line) <= maxWidth) {
+            wrapped.add(line);
+            return wrapped;
+        }
+
+        String[] words = line.split(" ");
+        StringBuilder current = new StringBuilder();
+        for (String word : words) {
+            if (current.length() == 0) {
+                current.append(word);
+                continue;
+            }
+            String candidate = current + " " + word;
+            if (font.width(candidate) <= maxWidth) {
+                current.append(" ").append(word);
+            } else {
+                wrapped.add(current.toString());
+                current.setLength(0);
+                current.append(word);
+            }
+        }
+        if (!current.isEmpty()) {
+            wrapped.add(current.toString());
+        }
+        return wrapped;
     }
 }

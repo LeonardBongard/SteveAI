@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
@@ -20,6 +21,8 @@ public class SteveMemory {
     private final Queue<String> taskQueue;
     private final LinkedList<String> recentActions;
     private final Deque<ViewSample> viewSamples;
+    private final PerceptionCache perceptionCache;
+    private List<VisibleBlockEntry> visibleBlocks;
     private static final int MAX_RECENT_ACTIONS = 20;
     private static final int MAX_VIEW_SAMPLES = 160;
     private static final String[] YAW_LABELS = {"S", "SW", "W", "NW", "N", "NE", "E", "SE"};
@@ -31,6 +34,8 @@ public class SteveMemory {
         this.taskQueue = new LinkedList<>();
         this.recentActions = new LinkedList<>();
         this.viewSamples = new ArrayDeque<>();
+        this.perceptionCache = new PerceptionCache();
+        this.visibleBlocks = new ArrayList<>();
     }
 
     public String getCurrentGoal() {
@@ -58,6 +63,14 @@ public class SteveMemory {
         }
         
         return result;
+    }
+
+    public List<VisibleBlockEntry> getVisibleBlocks() {
+        return Collections.unmodifiableList(visibleBlocks);
+    }
+
+    public void setVisibleBlocks(List<VisibleBlockEntry> visibleBlocks) {
+        this.visibleBlocks = new ArrayList<>(visibleBlocks);
     }
 
     public void clearTaskQueue() {
@@ -117,6 +130,12 @@ public class SteveMemory {
             result.add(coverage.get(i).label());
         }
         return result;
+    public PerceptionCache getPerceptionCache() {
+        return perceptionCache;
+    }
+
+    public List<VisibleBlock> getVisibleBlocksSnapshot() {
+        return perceptionCache.getVisibleBlocks();
     }
 
     public void saveToNBT(ValueOutput output) {
