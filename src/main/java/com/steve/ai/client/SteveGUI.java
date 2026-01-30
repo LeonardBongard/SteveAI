@@ -3,6 +3,7 @@ package com.steve.ai.client;
 import com.steve.ai.SteveMod;
 import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
+import com.steve.ai.network.SteveNetwork;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.gui.GuiGraphics;
@@ -83,6 +84,11 @@ public class SteveGUI {
             if (mc.screen instanceof SteveOverlayScreen) {
                 mc.setScreen(null);
             }
+            VisibleBlocksCache.clearAll();
+        }
+
+        if (mc.player != null) {
+            SteveNetwork.sendDebugUiState(isOpen);
         }
     }
 
@@ -174,7 +180,12 @@ public class SteveGUI {
             if (status == null || status.isBlank()) {
                 status = "Idle";
             }
-            lines.add(name + ": " + status);
+            VisibleBlocksCache.Snapshot snapshot = VisibleBlocksCache.getSnapshot(steve.getUUID());
+            if (snapshot != null) {
+                lines.add(name + ": " + status + " | blocks: " + snapshot.blocks().size());
+            } else {
+                lines.add(name + ": " + status);
+            }
             count++;
         }
 
