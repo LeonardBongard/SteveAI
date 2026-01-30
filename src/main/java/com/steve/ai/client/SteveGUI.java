@@ -11,6 +11,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.client.event.AddGuiOverlayLayersEvent;
 import net.minecraftforge.client.gui.overlay.ForgeLayeredDraw;
+import net.minecraft.world.phys.AABB;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -476,14 +477,21 @@ public class SteveGUI {
         List<String> targetSteves = parseTargetSteves(command);
         
         if (targetSteves.isEmpty()) {
-            var steves = SteveMod.getSteveManager().getAllSteves();
-            if (!steves.isEmpty()) {
-                targetSteves.add(steves.iterator().next().getSteveName());
-            } else {
-                // No Steves available
-                addSystemMessage("No Steve agents found! Use 'spawn <name>' to create one.");
-                return;
+            SteveEntity nearestSteve = getNearestClientSteve(mc);
+            if (nearestSteve != null) {
+                targetSteves.add(nearestSteve.getSteveName());
+            } else if (mc.hasSingleplayerServer()) {
+                var steves = SteveMod.getSteveManager().getAllSteves();
+                if (!steves.isEmpty()) {
+                    targetSteves.add(steves.iterator().next().getSteveName());
+                }
             }
+        }
+
+        if (targetSteves.isEmpty()) {
+            // No Steves available
+            addSystemMessage("No Steve agents found! Use 'spawn <name>' to create one.");
+            return;
         }
 
         // Send command to all targeted Steves
@@ -503,20 +511,32 @@ public class SteveGUI {
     private static List<String> parseTargetSteves(String command) {
         List<String> targets = new ArrayList<>();
         String commandLower = command.toLowerCase();
+        Minecraft mc = Minecraft.getInstance();
+        List<SteveEntity> clientSteves = getClientSteves(mc);
         
         if (commandLower.startsWith("all steves ") || commandLower.startsWith("all ") || 
             commandLower.startsWith("everyone ") || commandLower.startsWith("everybody ")) {
-            var allSteves = SteveMod.getSteveManager().getAllSteves();
-            for (SteveEntity steve : allSteves) {
+            for (SteveEntity steve : clientSteves) {
                 targets.add(steve.getSteveName());
+            }
+            if (targets.isEmpty() && mc.hasSingleplayerServer()) {
+                var allSteves = SteveMod.getSteveManager().getAllSteves();
+                for (SteveEntity steve : allSteves) {
+                    targets.add(steve.getSteveName());
+                }
             }
             return targets;
         }
         
-        var allSteves = SteveMod.getSteveManager().getAllSteves();
         List<String> availableNames = new ArrayList<>();
-        for (SteveEntity steve : allSteves) {
+        for (SteveEntity steve : clientSteves) {
             availableNames.add(steve.getSteveName().toLowerCase());
+        }
+        if (availableNames.isEmpty() && mc.hasSingleplayerServer()) {
+            var allSteves = SteveMod.getSteveManager().getAllSteves();
+            for (SteveEntity steve : allSteves) {
+                availableNames.add(steve.getSteveName().toLowerCase());
+            }
         }
         
         String[] parts = command.split(",");
@@ -525,16 +545,57 @@ public class SteveGUI {
             String firstWord = trimmed.split(" ")[0].toLowerCase();
             
             if (availableNames.contains(firstWord)) {
-                for (SteveEntity steve : allSteves) {
-                    if (steve.getSteveName().equalsIgnoreCase(firstWord)) {
-                        targets.add(steve.getSteveName());
-                        break;
-                    }
+                String matchedName = resolveSteveName(clientSteves, firstWord);
+                if (matchedName == null && mc.hasSingleplayerServer()) {
+                    var allSteves = SteveMod.getSteveManager().getAllSteves();
+                    matchedName = resolveSteveName(allSteves, firstWord);
+                }
+                if (matchedName != null) {
+                    targets.add(matchedName);
                 }
             }
         }
         
         return targets;
+    }
+
+    private static List<SteveEntity> getClientSteves(Minecraft mc) {
+        if (mc.level == null || mc.player == null) {
+            return List.of();
+        }
+        AABB searchBox = getClientViewRange(mc);
+        return mc.level.getEntitiesOfClass(SteveEntity.class, searchBox);
+    }
+
+    private static AABB getClientViewRange(Minecraft mc) {
+        int viewDistance = mc.options.getEffectiveRenderDistance();
+        double range = Math.max(16.0, viewDistance * 16.0);
+        return mc.player.getBoundingBox().inflate(range);
+    }
+
+    private static SteveEntity getNearestClientSteve(Minecraft mc) {
+        if (mc.player == null) {
+            return null;
+        }
+        SteveEntity nearest = null;
+        double nearestDistance = Double.MAX_VALUE;
+        for (SteveEntity steve : getClientSteves(mc)) {
+            double distance = mc.player.distanceToSqr(steve);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearest = steve;
+            }
+        }
+        return nearest;
+    }
+
+    private static String resolveSteveName(Iterable<SteveEntity> steves, String targetName) {
+        for (SteveEntity steve : steves) {
+            if (steve.getSteveName().equalsIgnoreCase(targetName)) {
+                return steve.getSteveName();
+            }
+        }
+        return null;
     }
 
     public static void tick() {
