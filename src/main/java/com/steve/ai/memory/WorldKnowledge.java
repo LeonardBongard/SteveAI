@@ -1,6 +1,7 @@
 package com.steve.ai.memory;
 
 import com.steve.ai.entity.SteveEntity;
+import com.steve.ai.memory.VisibleBlockEntry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
@@ -55,6 +56,25 @@ public class WorldKnowledge {
         Level level = steve.level();
         BlockPos stevePos = steve.blockPosition();
         long tick = level.getGameTime();
+
+        List<VisibleBlockEntry> perceptionEntries = steve.getMemory().getVisibleBlocks();
+        if (!perceptionEntries.isEmpty()) {
+            for (VisibleBlockEntry entry : perceptionEntries) {
+                Block block = BuiltInRegistries.BLOCK.getOptional(new net.minecraft.resources.ResourceLocation(entry.blockId()))
+                    .orElse(Blocks.AIR);
+                if (block == Blocks.AIR) {
+                    continue;
+                }
+                nearbyBlocks.put(block, nearbyBlocks.getOrDefault(block, 0) + 1);
+                visibleBlocks.add(new VisibleBlock(entry.blockId(), entry.position(), entry.distance(), entry.lastSeenTick()));
+            }
+            visibleBlocks.sort(Comparator.comparingDouble(VisibleBlock::distance));
+            if (visibleBlocks.size() > MAX_VISIBLE_BLOCKS) {
+                visibleBlocks = visibleBlocks.subList(0, MAX_VISIBLE_BLOCKS);
+            }
+            steve.getMemory().getPerceptionCache().updateVisibleBlocks(visibleBlocks);
+            return;
+        }
         
         for (int x = -scanRadius; x <= scanRadius; x += 2) {
             for (int y = -scanRadius; y <= scanRadius; y += 2) {
