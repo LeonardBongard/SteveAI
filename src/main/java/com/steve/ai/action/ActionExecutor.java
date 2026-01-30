@@ -489,6 +489,19 @@ public class ActionExecutor {
         return isPlanning;
     }
 
+    public void enqueueTask(Task task) {
+        if (task != null) {
+            taskQueue.add(task);
+        }
+    }
+
+    public void enqueueTasks(java.util.List<Task> tasks) {
+        if (tasks == null || tasks.isEmpty()) {
+            return;
+        }
+        taskQueue.addAll(tasks);
+    }
+
     private void updateDebugStatus(String status) {
         if (status == null || status.isBlank()) {
             status = "Idle";

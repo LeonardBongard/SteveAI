@@ -49,6 +49,10 @@ public class SteveGUI {
     private static final int DEBUG_BG_COLOR = 0xAA000000;
     private static final int DEBUG_TEXT_COLOR = 0xFFE0E0E0;
     private static final int DEBUG_ACCENT_COLOR = 0xFF7CD2FF;
+    private static final int INVENTORY_BG = 0xAA101010;
+    private static final int INVENTORY_BORDER = 0xFF4A4A4A;
+    private static final int INVENTORY_TEXT = 0xFFEDEDED;
+    private static boolean showInventoryOverlay = false;
 
     private static class ChatMessage {
         String sender; // "You", "Steve", "Alex", "System", etc.
@@ -140,12 +144,15 @@ public class SteveGUI {
 
     private static void onAddGuiOverlayLayers(AddGuiOverlayLayersEvent event) {
         Identifier layerId = Identifier.fromNamespaceAndPath(SteveMod.MODID, "steve_gui");
-        event.getLayeredDraw().addAbove(ForgeLayeredDraw.HOTBAR_AND_DECOS, layerId, SteveGUI::renderOverlay);
+        event.getLayeredDraw().add(ForgeLayeredDraw.VANILLA_ROOT, layerId, SteveGUI::renderOverlay);
     }
 
     private static void renderOverlay(GuiGraphics graphics, DeltaTracker deltaTracker) {
         if (SteveConfig.ENABLE_DEBUG_OVERLAY.get()) {
             renderDebugOverlay(graphics);
+        }
+        if (showInventoryOverlay) {
+            renderInventoryOverlay(graphics);
         }
         renderPanel(graphics);
     }
@@ -544,5 +551,75 @@ public class SteveGUI {
                 inputBox.setFocused(true);
             }
         }
+    }
+
+    public static void toggleInventoryOverlay() {
+        showInventoryOverlay = !showInventoryOverlay;
+        SteveMod.LOGGER.info("SteveGUI inventory overlay -> {}", showInventoryOverlay ? "ON" : "OFF");
+    }
+
+    private static void renderInventoryOverlay(GuiGraphics graphics) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) return;
+
+        List<SteveEntity> steves = mc.level.getEntitiesOfClass(
+            SteveEntity.class,
+            mc.player.getBoundingBox().inflate(96)
+        );
+        if (steves.isEmpty()) {
+            return;
+        }
+
+        SteveEntity steve = steves.get(0);
+        int width = 220;
+        int height = 70;
+        int x = 6;
+        int y = 30;
+
+        graphics.fill(x, y, x + width, y + height, INVENTORY_BG);
+        graphics.fill(x, y, x + width, y + 1, INVENTORY_BORDER);
+        graphics.fill(x, y, x + 1, y + height, INVENTORY_BORDER);
+        graphics.fill(x + width - 1, y, x + width, y + height, INVENTORY_BORDER);
+        graphics.fill(x, y + height - 1, x + width, y + height, INVENTORY_BORDER);
+        graphics.drawString(mc.font, "Steve Inventory", x + 6, y + 6, INVENTORY_TEXT);
+
+        String summary = steve.getInventorySummarySynced();
+        if (summary == null || summary.isBlank()) {
+            summary = "Inventory empty";
+        }
+
+        List<String> lines = wrapTextLines(mc.font, summary, width - 12);
+        int lineY = y + 20;
+        for (String line : lines) {
+            if (lineY > y + height - 10) break;
+            graphics.drawString(mc.font, line, x + 6, lineY, INVENTORY_TEXT);
+            lineY += mc.font.lineHeight + 2;
+        }
+    }
+
+    private static List<String> wrapTextLines(net.minecraft.client.gui.Font font, String text, int maxWidth) {
+        List<String> lines = new ArrayList<>();
+        String[] parts = text.split(", ");
+        StringBuilder current = new StringBuilder();
+        for (String part : parts) {
+            String candidate = current.length() == 0 ? part : current + ", " + part;
+            if (font.width(candidate) <= maxWidth) {
+                current.setLength(0);
+                current.append(candidate);
+            } else {
+                if (current.length() > 0) {
+                    lines.add(current.toString());
+                }
+                current.setLength(0);
+                current.append(part);
+            }
+        }
+        if (current.length() > 0) {
+            lines.add(current.toString());
+        }
+        if (lines.isEmpty()) {
+            lines.add(text);
+        }
+        return lines;
     }
 }

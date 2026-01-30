@@ -14,6 +14,7 @@ public class PlaceBlockAction extends BaseAction {
     private Block blockToPlace;
     private BlockPos targetPos;
     private int ticksRunning;
+    private boolean requestedMaterials = false;
     private static final int MAX_TICKS = 200;
 
     public PlaceBlockAction(SteveEntity steve, Task task) {
@@ -56,6 +57,23 @@ public class PlaceBlockAction extends BaseAction {
         BlockState currentState = steve.level().getBlockState(targetPos);
         if (!currentState.isAir() && !currentState.liquid()) {
             result = ActionResult.failure("Position is not empty");
+            return;
+        }
+
+        if (!steve.consumeItem(blockToPlace.asItem(), 1)) {
+            if (!requestedMaterials) {
+                requestedMaterials = true;
+                java.util.Map<String, Object> gatherParams = new java.util.HashMap<>();
+                gatherParams.put("resource", blockToPlace.getName().getString().toLowerCase().replace(" ", "_"));
+                gatherParams.put("quantity", 8);
+                steve.getActionExecutor().enqueueTask(new com.steve.ai.action.Task("gather", gatherParams));
+
+                java.util.Map<String, Object> placeParams = new java.util.HashMap<>(task.getParameters());
+                steve.getActionExecutor().enqueueTask(new com.steve.ai.action.Task("place", placeParams));
+                result = ActionResult.success("Gathering materials: " + blockToPlace.getName().getString());
+            } else {
+                result = ActionResult.failure("Missing item: " + blockToPlace.getName().getString());
+            }
             return;
         }
         

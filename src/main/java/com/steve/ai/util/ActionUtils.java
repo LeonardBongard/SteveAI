@@ -7,7 +7,9 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Common utility methods used across multiple action classes
@@ -54,6 +56,27 @@ public class ActionUtils {
      */
     public static Block parseBlock(String blockName) {
         blockName = blockName.toLowerCase().replace(" ", "_");
+
+        Map<String, String> aliases = new HashMap<>() {{
+            put("iron", "iron_ore");
+            put("diamond", "diamond_ore");
+            put("coal", "coal_ore");
+            put("gold", "gold_ore");
+            put("copper", "copper_ore");
+            put("redstone", "redstone_ore");
+            put("lapis", "lapis_ore");
+            put("emerald", "emerald_ore");
+            put("wood", "oak_log");
+            put("woods", "oak_log");
+            put("log", "oak_log");
+            put("logs", "oak_log");
+            put("tree", "oak_log");
+            put("trees", "oak_log");
+        }};
+
+        if (aliases.containsKey(blockName)) {
+            blockName = aliases.get(blockName);
+        }
 
         // Add minecraft namespace if not present
         if (!blockName.contains(":")) {

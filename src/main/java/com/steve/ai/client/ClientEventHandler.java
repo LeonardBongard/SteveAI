@@ -35,6 +35,10 @@ public class ClientEventHandler {
             }
         }
 
+        if (KeyBindings.TOGGLE_STEVE_INVENTORY != null && KeyBindings.TOGGLE_STEVE_INVENTORY.consumeClick()) {
+            SteveGUI.toggleInventoryOverlay();
+        }
+
         StevePovScreenshot.onClientTick();
     }
 }
