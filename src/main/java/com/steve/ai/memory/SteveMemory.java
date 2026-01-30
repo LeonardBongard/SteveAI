@@ -6,6 +6,7 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Queue;
@@ -15,6 +16,8 @@ public class SteveMemory {
     private String currentGoal;
     private final Queue<String> taskQueue;
     private final LinkedList<String> recentActions;
+    private final PerceptionCache perceptionCache;
+    private List<VisibleBlockEntry> visibleBlocks;
     private static final int MAX_RECENT_ACTIONS = 20;
 
     public SteveMemory(SteveEntity steve) {
@@ -22,6 +25,8 @@ public class SteveMemory {
         this.currentGoal = "";
         this.taskQueue = new LinkedList<>();
         this.recentActions = new LinkedList<>();
+        this.perceptionCache = new PerceptionCache();
+        this.visibleBlocks = new ArrayList<>();
     }
 
     public String getCurrentGoal() {
@@ -51,9 +56,25 @@ public class SteveMemory {
         return result;
     }
 
+    public List<VisibleBlockEntry> getVisibleBlocks() {
+        return Collections.unmodifiableList(visibleBlocks);
+    }
+
+    public void setVisibleBlocks(List<VisibleBlockEntry> visibleBlocks) {
+        this.visibleBlocks = new ArrayList<>(visibleBlocks);
+    }
+
     public void clearTaskQueue() {
         taskQueue.clear();
         currentGoal = "";
+    }
+
+    public PerceptionCache getPerceptionCache() {
+        return perceptionCache;
+    }
+
+    public List<VisibleBlock> getVisibleBlocksSnapshot() {
+        return perceptionCache.getVisibleBlocks();
     }
 
     public void saveToNBT(ValueOutput output) {

@@ -2,6 +2,7 @@ package com.steve.ai.memory;
 
 import com.steve.ai.entity.SteveEntity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
@@ -17,6 +18,7 @@ import java.util.*;
 public class WorldKnowledge {
     private final SteveEntity steve;
     private final int scanRadius = 16;
+    private static final int MAX_VISIBLE_BLOCKS = 64;
     private Map<Block, Integer> nearbyBlocks;
     private List<Entity> nearbyEntities;
     private String biomeName;
@@ -49,8 +51,10 @@ public class WorldKnowledge {
 
     private void scanBlocks() {
         nearbyBlocks = new HashMap<>();
+        List<VisibleBlock> visibleBlocks = new ArrayList<>();
         Level level = steve.level();
         BlockPos stevePos = steve.blockPosition();
+        long tick = level.getGameTime();
         
         for (int x = -scanRadius; x <= scanRadius; x += 2) {
             for (int y = -scanRadius; y <= scanRadius; y += 2) {
@@ -61,10 +65,21 @@ public class WorldKnowledge {
                     
                     if (block != Blocks.AIR && block != Blocks.CAVE_AIR && block != Blocks.VOID_AIR) {
                         nearbyBlocks.put(block, nearbyBlocks.getOrDefault(block, 0) + 1);
+                        String blockId = Optional.ofNullable(BuiltInRegistries.BLOCK.getKey(block))
+                            .map(Object::toString)
+                            .orElse("unknown");
+                        double distance = steve.position().distanceTo(net.minecraft.world.phys.Vec3.atCenterOf(checkPos));
+                        visibleBlocks.add(new VisibleBlock(blockId, checkPos, distance, tick));
                     }
                 }
             }
         }
+
+        visibleBlocks.sort(Comparator.comparingDouble(VisibleBlock::distance));
+        if (visibleBlocks.size() > MAX_VISIBLE_BLOCKS) {
+            visibleBlocks = visibleBlocks.subList(0, MAX_VISIBLE_BLOCKS);
+        }
+        steve.getMemory().getPerceptionCache().updateVisibleBlocks(visibleBlocks);
     }
 
     private void scanEntities() {
