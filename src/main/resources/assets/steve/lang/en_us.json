@@ -1,5 +1,6 @@
 {
   "key.categories.steve": "Steve AI",
-  "key.steve.toggle_gui": "Toggle Steve Panel"
+  "key.steve.toggle_gui": "Toggle Steve Panel",
+  "key.steve.toggle_pov": "Toggle Steve POV",
+  "key.steve.toggle_debug_blocks": "Toggle Steve Debug Blocks"
 }
-

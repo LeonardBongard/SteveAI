@@ -35,6 +35,14 @@ public class ClientEventHandler {
             }
         }
 
+        if (KeyBindings.TOGGLE_DEBUG_BLOCKS != null && KeyBindings.TOGGLE_DEBUG_BLOCKS.consumeClick()) {
+            if (mc.screen instanceof SteveDebugBlocksScreen) {
+                mc.setScreen(null);
+            } else {
+                mc.setScreen(new SteveDebugBlocksScreen());
+            }
+        }
+
         StevePovScreenshot.onClientTick();
     }
 }

@@ -13,6 +13,7 @@ public class KeyBindings {
     
     public static KeyMapping TOGGLE_GUI;
     public static KeyMapping TOGGLE_STEVE_POV;
+    public static KeyMapping TOGGLE_DEBUG_BLOCKS;
 
     public static void registerKeys(RegisterKeyMappingsEvent event) {
         TOGGLE_GUI = new KeyMapping(
@@ -32,5 +33,14 @@ public class KeyBindings {
         );
 
         event.register(TOGGLE_STEVE_POV);
+
+        TOGGLE_DEBUG_BLOCKS = new KeyMapping(
+            "key.steve.toggle_debug_blocks",
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_B, // B key
+            KEY_CATEGORY
+        );
+
+        event.register(TOGGLE_DEBUG_BLOCKS);
     }
 }
