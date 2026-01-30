@@ -10,6 +10,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
 
 public class SteveCommands {
@@ -117,13 +118,13 @@ public class SteveCommands {
         
         SteveManager manager = SteveMod.getSteveManager();
         SteveEntity steve = manager.getSteve(name);
-        
+
         if (steve != null) {
             // Disabled command feedback message
             // source.sendSuccess(() -> Component.literal("Instructing " + name + ": " + command), true);
-            
+            ServerPlayer commandingPlayer = source.getEntity() instanceof ServerPlayer player ? player : null;
             new Thread(() -> {
-                steve.getActionExecutor().processNaturalLanguageCommand(command);
+                steve.getActionExecutor().processNaturalLanguageCommand(command, commandingPlayer);
             }).start();
             
             return 1;
@@ -133,4 +134,3 @@ public class SteveCommands {
         }
     }
 }
-
