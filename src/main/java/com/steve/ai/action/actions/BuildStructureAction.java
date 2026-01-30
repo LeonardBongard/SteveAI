@@ -33,6 +33,7 @@ public class BuildStructureAction extends BaseAction {
     private int ticksRunning;
     private CollaborativeBuildManager.CollaborativeBuild collaborativeBuild; // For multi-Steve collaboration
     private boolean isCollaborative;
+    private boolean requestedMaterials = false;
     private static final int MAX_TICKS = 120000;
     private static final int BLOCKS_PER_TICK = 1;
     private static final double BUILD_SPEED_MULTIPLIER = 1.5;
@@ -226,6 +227,19 @@ public class BuildStructureAction extends BaseAction {
                 BlockState existingState = steve.level().getBlockState(pos);
                 
                 BlockState blockState = placement.block.defaultBlockState();
+                if (!steve.consumeItem(placement.block.asItem(), 1)) {
+                    if (!requestedMaterials) {
+                        requestedMaterials = true;
+                        enqueueMaterialGather(placement.block, estimateRemaining(placement.block));
+                        steve.setFlying(false);
+                        result = ActionResult.success("Gathering materials: " + placement.block.getName().getString());
+                        return;
+                    } else {
+                        steve.setFlying(false);
+                        result = ActionResult.failure("Out of materials: " + placement.block.getName().getString());
+                        return;
+                    }
+                }
                 steve.level().setBlock(pos, blockState, 3);
                 
                 SteveMod.LOGGER.info("Steve '{}' PLACED BLOCK at {} - Total: {}/{}", 
@@ -279,6 +293,29 @@ public class BuildStructureAction extends BaseAction {
     
     private Block getMaterial(int index) {
         return buildMaterials.get(index % buildMaterials.size());
+    }
+
+    private void enqueueMaterialGather(Block block, int quantity) {
+        java.util.Map<String, Object> gatherParams = new java.util.HashMap<>();
+        gatherParams.put("resource", block.getName().getString().toLowerCase().replace(" ", "_"));
+        gatherParams.put("quantity", quantity);
+        steve.getActionExecutor().enqueueTask(new Task("gather", gatherParams));
+
+        java.util.Map<String, Object> buildParams = new java.util.HashMap<>(task.getParameters());
+        steve.getActionExecutor().enqueueTask(new Task("build", buildParams));
+    }
+
+    private int estimateRemaining(Block block) {
+        if (buildPlan == null || buildPlan.isEmpty()) {
+            return 16;
+        }
+        int remaining = 0;
+        for (BlockPlacement placement : buildPlan) {
+            if (placement.block == block) {
+                remaining++;
+            }
+        }
+        return Math.max(remaining, 8);
     }
 
     private Block parseBlock(String blockName) {

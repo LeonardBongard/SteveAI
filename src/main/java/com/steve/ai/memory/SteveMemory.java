@@ -130,6 +130,8 @@ public class SteveMemory {
             result.add(coverage.get(i).label());
         }
         return result;
+    }
+
     public PerceptionCache getPerceptionCache() {
         return perceptionCache;
     }

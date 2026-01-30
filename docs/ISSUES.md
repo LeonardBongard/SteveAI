@@ -173,6 +173,27 @@ Desired outcome:
 Notes:
 - Current logic lives in `MineBlockAction` (scan + select + break).
 
+## 11) Mining can stall at "0 found" after starting (no target found)
+Summary:
+- MineBlockAction starts but never finds a target; it ticks indefinitely with "0 found".
+
+Repro:
+1. Command: "mine stone" (or any mine task).
+2. Observe action ticks.
+
+Expected:
+- Steve finds a nearby target or reports failure after a timeout with a clear reason.
+
+Actual:
+- "Mine X Stone (0 found)" repeats indefinitely; no movement or mining happens.
+
+Log snippet (example):
+- Steve 'Steve' mining Stone - visible scan + memory
+- Steve 'Steve' - Ticking action: Mine 16 Stone (0 found)
+
+Notes:
+- Still reproduces for dirt and stone even with cone particles and local radius scan; likely target acquisition never succeeds.
+
 ## Reference: AI generation method link
 Notes:
 - User-provided link for AI generation reference:

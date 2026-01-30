@@ -17,10 +17,16 @@ public class GatherResourceAction extends BaseAction {
         resourceType = task.getStringParameter("resource");
         quantity = task.getIntParameter("quantity", 1);
         
-        // This is essentially a smart wrapper around mining that:
-        // - Mines them
-        
-        result = ActionResult.failure("Resource gathering not yet fully implemented", false);
+        if (resourceType == null || resourceType.isBlank()) {
+            result = ActionResult.failure("Missing resource type");
+            return;
+        }
+
+        java.util.Map<String, Object> params = new java.util.HashMap<>();
+        params.put("block", resourceType);
+        params.put("quantity", quantity);
+        steve.getActionExecutor().enqueueTask(new com.steve.ai.action.Task("mine", params));
+        result = ActionResult.success("Gathering " + quantity + " " + resourceType);
     }
 
     @Override
@@ -37,4 +43,3 @@ public class GatherResourceAction extends BaseAction {
         return "Gather " + quantity + " " + resourceType;
     }
 }
-

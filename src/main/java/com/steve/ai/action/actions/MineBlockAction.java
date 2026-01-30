@@ -3,15 +3,21 @@ package com.steve.ai.action.actions;
 import com.steve.ai.SteveMod;
 import com.steve.ai.action.ActionResult;
 import com.steve.ai.action.Task;
+import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
-import com.steve.ai.memory.VisibleBlockEntry;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.HashMap;
 import java.util.List;
@@ -29,11 +35,24 @@ public class MineBlockAction extends BaseAction {
     private static final int TORCH_INTERVAL = 100; // Place torch every 5 seconds (100 ticks)
     private static final int MIN_LIGHT_LEVEL = 8;
     private static final int MINING_DELAY = 10;
-    private static final int EXPLORE_RETRY_INTERVAL = 40;
-    private static final int EXPLORE_RADIUS = 12;
-    private BlockPos exploreTarget;
-    private int ticksSinceExplore = 0;
-
+    private static final int CONE_RANGE = 12;
+    private static final float CONE_YAW = 30.0f;
+    private static final float CONE_PITCH = 18.0f;
+    private static final float YAW_STEP = 6.0f;
+    private static final float PITCH_STEP = 6.0f;
+    private static final int MEMORY_SEARCH_RADIUS = 48;
+    private static final int LOCAL_SCAN_RADIUS = 6;
+    private float scanYawOffset = 0.0f;
+    private float scanYawDirection = 1.0f;
+    private static final float SCAN_SWEEP_LIMIT = 60.0f;
+    private static final float SCAN_SWEEP_STEP = 6.0f;
+    private float scanPitchOffset = 0.0f;
+    private float scanPitchDirection = 1.0f;
+    private static final float SCAN_PITCH_LIMIT = 20.0f;
+    private static final float SCAN_PITCH_STEP = 3.0f;
+    private float scanYawAnchor = 0.0f;
+    private float scanPitchAnchor = 0.0f;
+    
     public MineBlockAction(SteveEntity steve, Task task) {
         super(steve, task);
     }
@@ -46,8 +65,6 @@ public class MineBlockAction extends BaseAction {
         ticksRunning = 0;
         ticksSinceLastTorch = 0;
         ticksSinceLastMine = 0;
-        ticksSinceExplore = 0;
-        exploreTarget = null;
         
         targetBlock = parseBlock(blockName);
         
@@ -56,15 +73,23 @@ public class MineBlockAction extends BaseAction {
             return;
         }
         
-        //steve.setFlying(true);
-        //steve.setInvulnerableBuilding(true); // Prevent suffocation damage while mining
+        steve.setFlying(true);
+        steve.setInvulnerableBuilding(true); // Prevent suffocation damage while mining
         
         equipIronPickaxe();
         
-        SteveMod.LOGGER.info("Steve '{}' mining {} - using perception snapshot", 
+        SteveMod.LOGGER.info("Steve '{}' mining {} - visible scan + memory", 
             steve.getSteveName(), targetBlock.getName().getString());
 
-        currentTarget = findNearestVisibleTarget();
+        scanYawAnchor = steve.getYRot();
+        scanPitchAnchor = steve.getXRot();
+        currentTarget = findVisibleTargetInCone();
+        if (currentTarget == null) {
+            currentTarget = findNearestFromMemory();
+            if (currentTarget == null) {
+                currentTarget = findNearbyTargetInRadius();
+            }
+        }
     }
 
     @Override
@@ -91,7 +116,14 @@ public class MineBlockAction extends BaseAction {
         }
         
         if (currentTarget == null) {
-            currentTarget = findNearestVisibleTarget();
+            sweepHead();
+            currentTarget = findVisibleTargetInCone();
+            if (currentTarget == null) {
+                currentTarget = findNearestFromMemory();
+                if (currentTarget == null) {
+                    currentTarget = findNearbyTargetInRadius();
+                }
+            }
             if (currentTarget == null) {
                 if (minedCount >= targetQuantity) {
                     steve.setFlying(false);
@@ -100,31 +132,29 @@ public class MineBlockAction extends BaseAction {
                     result = ActionResult.success("Mined " + minedCount + " " + targetBlock.getName().getString());
                     return;
                 }
-                ticksSinceExplore++;
-                if (ticksSinceExplore >= EXPLORE_RETRY_INTERVAL) {
-                    ticksSinceExplore = 0;
-                    exploreTarget = pickExploreTarget();
-                    if (exploreTarget != null) {
-                        steve.getNavigation().moveTo(
-                            exploreTarget.getX() + 0.5,
-                            exploreTarget.getY(),
-                            exploreTarget.getZ() + 0.5,
-                            1.0
-                        );
-                        SteveMod.LOGGER.info("Steve '{}' exploring for {} at {}", 
-                            steve.getSteveName(), targetBlock.getName().getString(), exploreTarget);
-                    }
-                }
                 return;
             }
         }
         
         if (steve.level().getBlockState(currentTarget).getBlock() == targetBlock) {
-            steve.teleportTo(currentTarget.getX() + 0.5, currentTarget.getY(), currentTarget.getZ() + 0.5);
+            double distance = steve.distanceToSqr(
+                currentTarget.getX() + 0.5,
+                currentTarget.getY() + 0.5,
+                currentTarget.getZ() + 0.5
+            );
+            if (distance > 4.0) {
+                steve.getNavigation().moveTo(
+                    currentTarget.getX() + 0.5,
+                    currentTarget.getY(),
+                    currentTarget.getZ() + 0.5,
+                    1.2
+                );
+                return;
+            }
             
             steve.swing(InteractionHand.MAIN_HAND, true);
             
-            steve.level().destroyBlock(currentTarget, true);
+            mineAndCollect(currentTarget);
             minedCount++;
             ticksSinceLastMine = 0; // Reset delay timer
             
@@ -157,50 +187,6 @@ public class MineBlockAction extends BaseAction {
     @Override
     public String getDescription() {
         return "Mine " + targetQuantity + " " + targetBlock.getName().getString() + " (" + minedCount + " found)";
-    }
-
-    private BlockPos findNearestVisibleTarget() {
-        List<VisibleBlockEntry> entries = steve.getMemory().getVisibleBlocks();
-        if (entries.isEmpty()) {
-            return null;
-        }
-        String targetId = BuiltInRegistries.BLOCK.getKey(targetBlock).toString();
-        VisibleBlockEntry best = null;
-        for (VisibleBlockEntry entry : entries) {
-            if (!targetId.equals(entry.blockId())) {
-                continue;
-            }
-            if (best == null || entry.distance() < best.distance()) {
-                best = entry;
-            }
-        }
-        return best != null ? best.position() : null;
-    }
-
-    private BlockPos pickExploreTarget() {
-        BlockPos origin = steve.blockPosition();
-        for (int attempt = 0; attempt < 12; attempt++) {
-            int dx = steve.getRandom().nextInt(EXPLORE_RADIUS * 2 + 1) - EXPLORE_RADIUS;
-            int dz = steve.getRandom().nextInt(EXPLORE_RADIUS * 2 + 1) - EXPLORE_RADIUS;
-            BlockPos base = origin.offset(dx, 0, dz);
-            BlockPos ground = findGroundAbove(base);
-            if (ground != null) {
-                return ground;
-            }
-        }
-        return null;
-    }
-
-    private BlockPos findGroundAbove(BlockPos pos) {
-        int startY = Math.min(pos.getY() + 3, steve.level().getMaxBuildHeight() - 1);
-        for (int y = startY; y >= pos.getY() - 6 && y > steve.level().getMinBuildHeight(); y--) {
-            BlockPos check = new BlockPos(pos.getX(), y, pos.getZ());
-            BlockState state = steve.level().getBlockState(check);
-            if (state.isSolid()) {
-                return check.above();
-            }
-        }
-        return null;
     }
 
     /**
@@ -244,6 +230,114 @@ public class MineBlockAction extends BaseAction {
             }
         }
         
+        return null;
+    }
+
+    private BlockPos findVisibleTargetInCone() {
+        Vec3 eyePos = steve.getEyePosition(1.0F);
+        float baseYaw = scanYawAnchor + scanYawOffset;
+        float basePitch = scanPitchAnchor + scanPitchOffset;
+
+        BlockPos bestPos = null;
+        double bestDist = Double.MAX_VALUE;
+
+        for (float yawOffset = -CONE_YAW; yawOffset <= CONE_YAW; yawOffset += YAW_STEP) {
+            for (float pitchOffset = -CONE_PITCH; pitchOffset <= CONE_PITCH; pitchOffset += PITCH_STEP) {
+                Vec3 dir = Vec3.directionFromRotation(basePitch + pitchOffset, baseYaw + yawOffset);
+                boolean debugScan = SteveConfig.ENABLE_DEBUG_OVERLAY.get() && (ticksRunning % 20 == 0);
+                BlockPos hitPos = scanRayForTargetAndRecord(eyePos, dir, CONE_RANGE, debugScan);
+                if (hitPos == null) {
+                    continue;
+                }
+
+                double dist = eyePos.distanceToSqr(Vec3.atCenterOf(hitPos));
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestPos = hitPos;
+                }
+            }
+        }
+
+        return bestPos;
+    }
+
+    private void sweepHead() {
+        scanYawOffset += SCAN_SWEEP_STEP * scanYawDirection;
+        if (scanYawOffset >= SCAN_SWEEP_LIMIT) {
+            scanYawOffset = SCAN_SWEEP_LIMIT;
+            scanYawDirection = -1.0f;
+        } else if (scanYawOffset <= -SCAN_SWEEP_LIMIT) {
+            scanYawOffset = -SCAN_SWEEP_LIMIT;
+            scanYawDirection = 1.0f;
+        }
+        scanPitchOffset += SCAN_PITCH_STEP * scanPitchDirection;
+        if (scanPitchOffset >= SCAN_PITCH_LIMIT) {
+            scanPitchOffset = SCAN_PITCH_LIMIT;
+            scanPitchDirection = -1.0f;
+        } else if (scanPitchOffset <= -SCAN_PITCH_LIMIT) {
+            scanPitchOffset = -SCAN_PITCH_LIMIT;
+            scanPitchDirection = 1.0f;
+        }
+        steve.setYRot(scanYawAnchor + scanYawOffset);
+        steve.setXRot(scanPitchAnchor + scanPitchOffset);
+        steve.yHeadRot = steve.getYRot();
+    }
+
+    private BlockPos findNearestFromMemory() {
+        List<BlockPos> matches = steve.getBlockMemory().findNearestMatches(
+            targetBlock,
+            steve.blockPosition(),
+            MEMORY_SEARCH_RADIUS,
+            20
+        );
+        return matches.isEmpty() ? null : matches.get(0);
+    }
+
+    private BlockPos findNearbyTargetInRadius() {
+        BlockPos origin = steve.blockPosition();
+        BlockPos bestPos = null;
+        double bestDist = Double.MAX_VALUE;
+
+        for (int dx = -LOCAL_SCAN_RADIUS; dx <= LOCAL_SCAN_RADIUS; dx++) {
+            for (int dy = -LOCAL_SCAN_RADIUS; dy <= LOCAL_SCAN_RADIUS; dy++) {
+                for (int dz = -LOCAL_SCAN_RADIUS; dz <= LOCAL_SCAN_RADIUS; dz++) {
+                    BlockPos pos = origin.offset(dx, dy, dz);
+                    BlockState state = steve.level().getBlockState(pos);
+                    if (state.getBlock() != targetBlock) {
+                        continue;
+                    }
+                    double dist = origin.distSqr(pos);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestPos = pos;
+                    }
+                }
+            }
+        }
+
+        return bestPos;
+    }
+
+    private BlockPos scanRayForTargetAndRecord(Vec3 start, Vec3 dir, int range, boolean debugScan) {
+        ServerLevel serverLevel = steve.level() instanceof ServerLevel level ? level : null;
+        for (int step = 1; step <= range; step++) {
+            Vec3 sample = start.add(dir.scale(step));
+            BlockPos pos = new BlockPos(Mth.floor(sample.x), Mth.floor(sample.y), Mth.floor(sample.z));
+            BlockState state = steve.level().getBlockState(pos);
+            if (debugScan && serverLevel != null && (step % 2 == 0)) {
+                serverLevel.sendParticles(ParticleTypes.END_ROD, sample.x, sample.y, sample.z, 1, 0, 0, 0, 0);
+            }
+            if (state.isAir() || state.getBlock() == Blocks.BEDROCK) {
+                continue;
+            }
+            steve.getBlockMemory().record(pos, state);
+            if (state.getBlock() == targetBlock) {
+                if (debugScan && serverLevel != null) {
+                    serverLevel.sendParticles(ParticleTypes.HAPPY_VILLAGER, sample.x, sample.y, sample.z, 2, 0, 0, 0, 0);
+                }
+                return pos;
+            }
+        }
         return null;
     }
 
@@ -293,5 +387,33 @@ public class MineBlockAction extends BaseAction {
             return Blocks.AIR;
         }
         return BuiltInRegistries.BLOCK.getOptional(identifier).orElse(Blocks.AIR);
+    }
+
+    private void mineAndCollect(BlockPos pos) {
+        BlockState state = steve.level().getBlockState(pos);
+        if (state.isAir() || state.getBlock() == Blocks.BEDROCK) {
+            return;
+        }
+        if (!(steve.level() instanceof ServerLevel serverLevel)) {
+            steve.level().destroyBlock(pos, true);
+            return;
+        }
+
+        ItemStack tool = steve.getItemInHand(InteractionHand.MAIN_HAND);
+        List<ItemStack> drops = Block.getDrops(state, serverLevel, pos, serverLevel.getBlockEntity(pos), steve, tool);
+        steve.level().destroyBlock(pos, false);
+
+        for (ItemStack drop : drops) {
+            ItemStack remaining = steve.addToInventory(drop);
+            if (!remaining.isEmpty()) {
+                serverLevel.addFreshEntity(new ItemEntity(
+                    serverLevel,
+                    pos.getX() + 0.5,
+                    pos.getY() + 0.5,
+                    pos.getZ() + 0.5,
+                    remaining
+                ));
+            }
+        }
     }
 }

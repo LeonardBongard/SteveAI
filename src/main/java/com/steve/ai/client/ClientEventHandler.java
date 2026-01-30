@@ -35,12 +35,8 @@ public class ClientEventHandler {
             }
         }
 
-        if (KeyBindings.TOGGLE_DEBUG_BLOCKS != null && KeyBindings.TOGGLE_DEBUG_BLOCKS.consumeClick()) {
-            if (mc.screen instanceof SteveDebugBlocksScreen) {
-                mc.setScreen(null);
-            } else {
-                mc.setScreen(new SteveDebugBlocksScreen());
-            }
+        if (KeyBindings.TOGGLE_STEVE_INVENTORY != null && KeyBindings.TOGGLE_STEVE_INVENTORY.consumeClick()) {
+            SteveGUI.toggleInventoryOverlay();
         }
 
         StevePovScreenshot.onClientTick();

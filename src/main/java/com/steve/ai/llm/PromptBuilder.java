@@ -2,12 +2,15 @@ package com.steve.ai.llm;
 
 import com.steve.ai.entity.SteveEntity;
 import com.steve.ai.memory.WorldKnowledge;
+import com.steve.ai.util.ActionUtils;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.item.ItemStack;
-
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import java.util.List;
+import java.util.Locale;
 
 public class PromptBuilder {
+    private static final int MEMORY_PROMPT_RADIUS = 48;
     
     public static String buildSystemPrompt() {
         return """
@@ -72,6 +75,20 @@ public class PromptBuilder {
         prompt.append("Nearby Entities: ").append(worldKnowledge.getNearbyEntitiesSummary()).append("\n");
         prompt.append("Nearby Blocks: ").append(worldKnowledge.getNearbyBlocksSummary()).append("\n");
         prompt.append("Biome: ").append(worldKnowledge.getBiomeName()).append("\n");
+
+        Block targetBlock = extractTargetBlock(command);
+        if (targetBlock != Blocks.AIR) {
+            List<BlockPos> matches = steve.getBlockMemory().findNearestMatches(
+                targetBlock,
+                steve.blockPosition(),
+                MEMORY_PROMPT_RADIUS,
+                20
+            );
+            prompt.append("Remembered ").append(targetBlock.getName().getString())
+                .append(" (nearest 20): ")
+                .append(formatPositions(matches))
+                .append("\n");
+        }
         
         prompt.append("\n=== PLAYER COMMAND ===\n");
         prompt.append("\"").append(command).append("\"\n");
@@ -88,5 +105,65 @@ public class PromptBuilder {
     private static String formatInventory(SteveEntity steve) {
         return "[empty]";
     }
-}
 
+    private static Block extractTargetBlock(String command) {
+        String cleaned = command.toLowerCase(Locale.ROOT)
+            .replaceAll("[^a-z0-9:_\\s]", " ")
+            .trim();
+        if (cleaned.isEmpty()) {
+            return Blocks.AIR;
+        }
+
+        String[] tokens = cleaned.split("\\s+");
+        String[] keywords = {"mine", "get", "gather", "collect", "find", "harvest", "dig"};
+
+        for (int i = 0; i < tokens.length; i++) {
+            for (String keyword : keywords) {
+                if (!tokens[i].equals(keyword)) {
+                    continue;
+                }
+                Block block = tryParseBlockToken(tokens, i + 1);
+                if (block != Blocks.AIR) {
+                    return block;
+                }
+            }
+        }
+
+        Block fallback = tryParseBlockToken(tokens, tokens.length - 1);
+        return fallback;
+    }
+
+    private static Block tryParseBlockToken(String[] tokens, int index) {
+        if (index < 0 || index >= tokens.length) {
+            return Blocks.AIR;
+        }
+        String candidate = tokens[index];
+        Block block = ActionUtils.parseBlock(candidate);
+        if (block != Blocks.AIR) {
+            return block;
+        }
+        if (index + 1 < tokens.length) {
+            block = ActionUtils.parseBlock(candidate + "_" + tokens[index + 1]);
+            if (block != Blocks.AIR) {
+                return block;
+            }
+        }
+        return Blocks.AIR;
+    }
+
+    private static String formatPositions(List<BlockPos> positions) {
+        if (positions.isEmpty()) {
+            return "none";
+        }
+        StringBuilder sb = new StringBuilder();
+        int limit = Math.min(positions.size(), 20);
+        for (int i = 0; i < limit; i++) {
+            if (i > 0) {
+                sb.append("; ");
+            }
+            BlockPos pos = positions.get(i);
+            sb.append(pos.getX()).append(",").append(pos.getY()).append(",").append(pos.getZ());
+        }
+        return sb.toString();
+    }
+}
