@@ -15,6 +15,7 @@ public class SteveMemory {
     private String currentGoal;
     private final Queue<String> taskQueue;
     private final LinkedList<String> recentActions;
+    private final PerceptionCache perceptionCache;
     private static final int MAX_RECENT_ACTIONS = 20;
 
     public SteveMemory(SteveEntity steve) {
@@ -22,6 +23,7 @@ public class SteveMemory {
         this.currentGoal = "";
         this.taskQueue = new LinkedList<>();
         this.recentActions = new LinkedList<>();
+        this.perceptionCache = new PerceptionCache();
     }
 
     public String getCurrentGoal() {
@@ -54,6 +56,14 @@ public class SteveMemory {
     public void clearTaskQueue() {
         taskQueue.clear();
         currentGoal = "";
+    }
+
+    public PerceptionCache getPerceptionCache() {
+        return perceptionCache;
+    }
+
+    public List<VisibleBlock> getVisibleBlocksSnapshot() {
+        return perceptionCache.getVisibleBlocks();
     }
 
     public void saveToNBT(ValueOutput output) {
