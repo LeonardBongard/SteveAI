@@ -213,6 +213,14 @@ public class SteveGUI {
                 lines.add(name + ": " + status);
                 count++;
             }
+            lines.add(name + ": " + status);
+            if (SteveConfig.ENABLE_VIEW_COVERAGE_OVERLAY.get()) {
+                lines.add(steve.getMemory().getViewCoverageSummary());
+                List<String> leastSeen = steve.getMemory().getLeastSeenDirections(3);
+                String leastSeenText = leastSeen.isEmpty() ? "none" : String.join(", ", leastSeen);
+                lines.add("Least seen: " + leastSeenText);
+            }
+            count++;
         }
 
         int padding = 4;

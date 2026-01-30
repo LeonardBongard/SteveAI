@@ -13,6 +13,7 @@ public class SteveConfig {
     public static final ForgeConfigSpec.BooleanValue ENABLE_CHAT_RESPONSES;
     public static final ForgeConfigSpec.IntValue MAX_ACTIVE_STEVES;
     public static final ForgeConfigSpec.BooleanValue ENABLE_DEBUG_OVERLAY;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_VIEW_COVERAGE_OVERLAY;
     
     // Ollama configuration
     public static final ForgeConfigSpec.ConfigValue<String> OLLAMA_BASE_URL;
@@ -79,6 +80,10 @@ public class SteveConfig {
         ENABLE_DEBUG_OVERLAY = builder
             .comment("Show on-screen debug overlay with Steve status")
             .define("enableDebugOverlay", true);
+
+        ENABLE_VIEW_COVERAGE_OVERLAY = builder
+            .comment("Show view coverage summary and least-seen directions in the debug overlay")
+            .define("enableViewCoverageOverlay", false);
 
         MAX_ACTIVE_STEVES = builder
             .comment("Maximum number of Steves that can be active simultaneously")
