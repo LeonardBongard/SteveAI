@@ -79,6 +79,7 @@ public class SteveMod {
 
     private void commonSetup(final FMLCommonSetupEvent event) {
         LOGGER.info("SteveMod common setup");
+        event.enqueueWork(com.steve.ai.network.SteveNetworkHandler::register);
     }
 
     private void entityAttributes(EntityAttributeCreationEvent event) {
