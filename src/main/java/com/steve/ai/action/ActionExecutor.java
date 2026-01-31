@@ -11,7 +11,7 @@ import com.steve.ai.llm.ResponseParser;
 import com.steve.ai.llm.TaskPlanner;
 import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
-import com.steve.ai.network.SteveNetwork;
+import net.minecraft.network.chat.Component;
 import com.steve.ai.plugin.ActionRegistry;
 import com.steve.ai.plugin.PluginManager;
 import net.minecraft.server.level.ServerPlayer;
@@ -241,7 +241,7 @@ public class ActionExecutor {
 
         ServerPlayer player = steve.level().getServer().getPlayerList().getPlayer(lastCommandingPlayerId);
         if (player != null) {
-            SteveNetwork.sendToPlayer(player, steveName, message);
+            player.displayClientMessage(Component.literal("<" + steveName + "> " + message), false);
         }
     }
 

@@ -42,7 +42,7 @@ public class SteveDebugBlocksScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics);
+        renderBackground(graphics, mouseX, mouseY, partialTick);
         int panelWidth = Math.min(360, this.width - PANEL_MARGIN * 2);
         int panelHeight = this.height - PANEL_MARGIN * 2;
         int panelX = (this.width - panelWidth) / 2;

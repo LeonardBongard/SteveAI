@@ -5,7 +5,6 @@ import com.steve.ai.command.SteveCommands;
 import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
 import com.steve.ai.entity.SteveManager;
-import com.steve.ai.network.SteveNetwork;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
@@ -80,7 +79,6 @@ public class SteveMod {
 
     private void commonSetup(final FMLCommonSetupEvent event) {
         LOGGER.info("SteveMod common setup");
-        event.enqueueWork(com.steve.ai.network.SteveNetworkHandler::register);
 
     }
 

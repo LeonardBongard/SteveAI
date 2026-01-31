@@ -5,6 +5,7 @@ import com.steve.ai.memory.VisibleBlockEntry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
@@ -14,7 +15,12 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 public class WorldKnowledge {
     private final SteveEntity steve;
@@ -60,8 +66,8 @@ public class WorldKnowledge {
         List<VisibleBlockEntry> perceptionEntries = steve.getMemory().getVisibleBlocks();
         if (!perceptionEntries.isEmpty()) {
             for (VisibleBlockEntry entry : perceptionEntries) {
-                Block block = BuiltInRegistries.BLOCK.getOptional(new net.minecraft.resources.ResourceLocation(entry.blockId()))
-                    .orElse(Blocks.AIR);
+                Identifier id = Identifier.tryParse(entry.blockId());
+                Block block = id == null ? Blocks.AIR : BuiltInRegistries.BLOCK.getOptional(id).orElse(Blocks.AIR);
                 if (block == Blocks.AIR) {
                     continue;
                 }

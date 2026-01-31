@@ -173,26 +173,26 @@ Desired outcome:
 Notes:
 - Current logic lives in `MineBlockAction` (scan + select + break).
 
-## 11) Mining can stall at "0 found" after starting (no target found)
+## 11) Mining can stall on unreachable target (target repeats after rescan)
 Summary:
-- MineBlockAction starts but never finds a target; it ticks indefinitely with "0 found".
+- MineBlockAction gets stuck on one target; rescans keep re-selecting the same unreachable block, so progress stalls at 0/n or mid-quantity.
 
 Repro:
 1. Command: "mine stone" (or any mine task).
 2. Observe action ticks.
 
 Expected:
-- Steve finds a nearby target or reports failure after a timeout with a clear reason.
+- Steve keeps finding nearby targets until quantity is reached or reports failure after a timeout with a clear reason.
 
 Actual:
-- "Mine X Stone (0 found)" repeats indefinitely; no movement or mining happens.
+- Ticks repeat with the same target; logs show "stuck approaching target ... forcing rescan" but it re-picks the same target.
 
 Log snippet (example):
-- Steve 'Steve' mining Stone - visible scan + memory
-- Steve 'Steve' - Ticking action: Mine 16 Stone (0 found)
+- Steve 'Steve' - Ticking action: Mine 1 Dirt (0 found) target=215,61,-329
+- Steve 'Steve' stuck approaching target BlockPos{x=215, y=61, z=-329}; forcing rescan
 
 Notes:
-- Still reproduces for dirt and stone even with cone particles and local radius scan; likely target acquisition never succeeds.
+- Reproduces for dirt/stone even with perception snapshot + local radius scan; likely target acquisition or refresh stops after first success.
 
 ## Reference: AI generation method link
 Notes:

@@ -2,6 +2,7 @@ package com.steve.ai.llm;
 
 import com.steve.ai.entity.SteveEntity;
 import com.steve.ai.memory.WorldKnowledge;
+import com.steve.ai.memory.VisibleBlockEntry;
 import com.steve.ai.util.ActionUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.Block;
@@ -10,8 +11,6 @@ import java.util.List;
 import java.util.Locale;
 
 public class PromptBuilder {
-    private static final int MEMORY_PROMPT_RADIUS = 48;
-    
     public static String buildSystemPrompt() {
         return """
             You are a Minecraft AI agent. Respond ONLY with valid JSON, no extra text.
@@ -78,16 +77,13 @@ public class PromptBuilder {
 
         Block targetBlock = extractTargetBlock(command);
         if (targetBlock != Blocks.AIR) {
-            List<BlockPos> matches = steve.getBlockMemory().findNearestMatches(
-                targetBlock,
-                steve.blockPosition(),
-                MEMORY_PROMPT_RADIUS,
-                20
-            );
-            prompt.append("Remembered ").append(targetBlock.getName().getString())
-                .append(" (nearest 20): ")
-                .append(formatPositions(matches))
-                .append("\n");
+            List<VisibleBlockEntry> entries = steve.getMemory().getVisibleBlocks();
+            if (!entries.isEmpty()) {
+                prompt.append("Visible ").append(targetBlock.getName().getString())
+                    .append(" (nearest 20): ")
+                    .append(formatVisiblePositions(entries, targetBlock))
+                    .append("\n");
+            }
         }
         
         prompt.append("\n=== PLAYER COMMAND ===\n");
@@ -151,19 +147,24 @@ public class PromptBuilder {
         return Blocks.AIR;
     }
 
-    private static String formatPositions(List<BlockPos> positions) {
-        if (positions.isEmpty()) {
-            return "none";
-        }
+    private static String formatVisiblePositions(List<VisibleBlockEntry> entries, Block targetBlock) {
+        String targetId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(targetBlock).toString();
         StringBuilder sb = new StringBuilder();
-        int limit = Math.min(positions.size(), 20);
-        for (int i = 0; i < limit; i++) {
-            if (i > 0) {
+        int count = 0;
+        for (VisibleBlockEntry entry : entries) {
+            if (!targetId.equals(entry.blockId())) {
+                continue;
+            }
+            if (count > 0) {
                 sb.append("; ");
             }
-            BlockPos pos = positions.get(i);
+            BlockPos pos = entry.position();
             sb.append(pos.getX()).append(",").append(pos.getY()).append(",").append(pos.getZ());
+            count++;
+            if (count >= 20) {
+                break;
+            }
         }
-        return sb.toString();
+        return count == 0 ? "none" : sb.toString();
     }
 }

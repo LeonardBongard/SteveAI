@@ -10,6 +10,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.StreamSupport;
 
 public final class SteveDebugBlocksData {
     private static final Map<Integer, List<VisibleBlockEntry>> VISIBLE_BLOCKS = new HashMap<>();
@@ -47,7 +48,7 @@ public final class SteveDebugBlocksData {
         if (minecraft == null || minecraft.level == null) {
             return;
         }
-        List<SteveEntity> steves = minecraft.level.entitiesForRendering().stream()
+        List<SteveEntity> steves = StreamSupport.stream(minecraft.level.entitiesForRendering().spliterator(), false)
             .filter(SteveEntity.class::isInstance)
             .map(SteveEntity.class::cast)
             .sorted(Comparator.comparingInt(Entity::getId))

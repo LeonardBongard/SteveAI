@@ -172,16 +172,20 @@ public class SteveGUI {
 
         List<String> lines = new ArrayList<>();
         lines.add("Steve Debug");
-        int maxLines = 5;
+        int maxSteves = 3;
         int count = 0;
         for (SteveEntity steve : steves) {
-            if (count >= maxLines) break;
+            if (count >= maxSteves) break;
             String name = steve.getSteveName();
             String status = steve.getDebugStatus();
             if (status == null || status.isBlank()) {
                 status = "Idle";
             }
+            int visibleCount = steve.getVisibleBlocksCount();
+            int scanAge = steve.getVisibleScanAge();
+            String scanAgeLabel = scanAge < 0 ? "n/a" : scanAge + "t";
             lines.add(name + ": " + status);
+            lines.add("  visible=" + visibleCount + " scanAge=" + scanAgeLabel);
             count++;
         }
 

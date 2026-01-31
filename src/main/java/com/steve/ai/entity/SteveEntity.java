@@ -1,9 +1,10 @@
 package com.steve.ai.entity;
 
 import com.steve.ai.action.ActionExecutor;
-import com.steve.ai.memory.BlockMemory;
-import com.steve.ai.memory.BlockMemoryScanner;
 import com.steve.ai.memory.SteveMemory;
+import com.steve.ai.memory.VisibleBlockEntry;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -12,6 +13,9 @@ import net.minecraft.core.NonNullList;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.DifficultyInstance;
@@ -24,7 +28,11 @@ import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ServerLevelAccessor;
+import net.minecraft.server.level.ServerLevel;
 import org.jetbrains.annotations.Nullable;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 public class SteveEntity extends PathfinderMob {
     private static final EntityDataAccessor<String> STEVE_NAME = 
@@ -37,20 +45,21 @@ public class SteveEntity extends PathfinderMob {
     private String steveName;
     private SteveMemory memory;
     private ActionExecutor actionExecutor;
+    private int tickCounter = 0;
+    private static final int VISIBLE_BLOCK_SCAN_INTERVAL = 20;
+    private static final int VISIBLE_BLOCK_SCAN_RADIUS = 6;
+    private static final int VISIBLE_BLOCK_MAX_ENTRIES = 120;
+    private int lastVisibleScanTick = -1;
     private boolean isFlying = false;
-    private final BlockMemoryScanner blockMemoryScanner;
     private boolean isInvulnerable = false;
     private final NonNullList<ItemStack> inventory = NonNullList.withSize(36, ItemStack.EMPTY);
     private int pickupCooldown = 0;
-    private final BlockMemory blockMemory;
 
     public SteveEntity(EntityType<? extends PathfinderMob> entityType, Level level) {
         super(entityType, level);
         this.steveName = "Steve";
         this.memory = new SteveMemory(this);
         this.actionExecutor = new ActionExecutor(this);
-        this.blockMemory = new BlockMemory(this, 2400);
-        this.blockMemoryScanner = new BlockMemoryScanner(this);
         this.setCustomNameVisible(true);
         
         this.isInvulnerable = true;
@@ -87,7 +96,10 @@ public class SteveEntity extends PathfinderMob {
         if (!this.level().isClientSide()) {
             actionExecutor.tick();
             pickupNearbyItems();
-            blockMemoryScanner.tick();
+            tickCounter++;
+            if (tickCounter % VISIBLE_BLOCK_SCAN_INTERVAL == 0 && this.level() instanceof ServerLevel serverLevel) {
+                updateVisibleBlocks(serverLevel);
+            }
         }
     }
 
@@ -109,8 +121,21 @@ public class SteveEntity extends PathfinderMob {
         return this.actionExecutor;
     }
 
-    public BlockMemory getBlockMemory() {
-        return this.blockMemory;
+    public int getVisibleBlocksCount() {
+        return memory.getVisibleBlocks().size();
+    }
+
+    public int getVisibleScanAge() {
+        if (lastVisibleScanTick < 0) {
+            return -1;
+        }
+        return tickCounter - lastVisibleScanTick;
+    }
+
+    public void forceVisibleScan() {
+        if (this.level() instanceof ServerLevel serverLevel) {
+            updateVisibleBlocks(serverLevel);
+        }
     }
 
     public ItemStack addToInventory(ItemStack stack) {
@@ -361,6 +386,35 @@ public class SteveEntity extends PathfinderMob {
 
     public boolean isFlying() {
         return this.isFlying;
+    }
+
+    private void updateVisibleBlocks(ServerLevel serverLevel) {
+        BlockPos origin = this.blockPosition();
+        List<VisibleBlockEntry> entries = new ArrayList<>();
+
+        for (int x = -VISIBLE_BLOCK_SCAN_RADIUS; x <= VISIBLE_BLOCK_SCAN_RADIUS; x++) {
+            for (int y = -VISIBLE_BLOCK_SCAN_RADIUS; y <= VISIBLE_BLOCK_SCAN_RADIUS; y++) {
+                for (int z = -VISIBLE_BLOCK_SCAN_RADIUS; z <= VISIBLE_BLOCK_SCAN_RADIUS; z++) {
+                    BlockPos pos = origin.offset(x, y, z);
+                    BlockState state = serverLevel.getBlockState(pos);
+                    Block block = state.getBlock();
+                    if (block == Blocks.AIR || block == Blocks.CAVE_AIR || block == Blocks.VOID_AIR) {
+                        continue;
+                    }
+                    String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
+                    float distance = (float) Math.sqrt(origin.distSqr(pos));
+                    entries.add(new VisibleBlockEntry(blockId, pos.immutable(), distance, tickCounter));
+                }
+            }
+        }
+
+        entries.sort(Comparator.comparing(VisibleBlockEntry::distance));
+        if (entries.size() > VISIBLE_BLOCK_MAX_ENTRIES) {
+            entries = new ArrayList<>(entries.subList(0, VISIBLE_BLOCK_MAX_ENTRIES));
+        }
+
+        memory.setVisibleBlocks(entries);
+        lastVisibleScanTick = tickCounter;
     }
 
     /**
