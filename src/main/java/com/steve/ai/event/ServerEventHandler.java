@@ -4,6 +4,7 @@ import com.steve.ai.SteveMod;
 import com.steve.ai.entity.SteveEntity;
 import com.steve.ai.entity.SteveManager;
 import com.steve.ai.memory.StructureRegistry;
+import com.steve.ai.network.DebugUiTracker;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
@@ -58,5 +59,6 @@ public class ServerEventHandler {
     @SubscribeEvent
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         stevesSpawned = false;
+        DebugUiTracker.remove(event.getEntity().getUUID());
     }
 }

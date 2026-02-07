@@ -13,6 +13,10 @@ public class SteveConfig {
     public static final ForgeConfigSpec.BooleanValue ENABLE_CHAT_RESPONSES;
     public static final ForgeConfigSpec.IntValue MAX_ACTIVE_STEVES;
     public static final ForgeConfigSpec.BooleanValue ENABLE_DEBUG_OVERLAY;
+    public static final ForgeConfigSpec.IntValue DEBUG_VISIBLE_BLOCK_TICK_INTERVAL;
+    public static final ForgeConfigSpec.IntValue DEBUG_VISIBLE_BLOCK_RADIUS;
+    public static final ForgeConfigSpec.IntValue DEBUG_VISIBLE_BLOCK_MAX_ENTRIES;
+    public static final ForgeConfigSpec.BooleanValue DEBUG_BROADCAST_VISIBLE_BLOCKS;
     public static final ForgeConfigSpec.BooleanValue ENABLE_VIEW_COVERAGE_OVERLAY;
     
     // Ollama configuration
@@ -81,6 +85,21 @@ public class SteveConfig {
             .comment("Show on-screen debug overlay with Steve status")
             .define("enableDebugOverlay", true);
 
+        DEBUG_VISIBLE_BLOCK_TICK_INTERVAL = builder
+            .comment("Ticks between visible-block snapshot updates (20 ticks = 1 second)")
+            .defineInRange("debugVisibleBlockTickInterval", 10, 1, 200);
+
+        DEBUG_VISIBLE_BLOCK_RADIUS = builder
+            .comment("Radius around each Steve to sample visible blocks for debug snapshots")
+            .defineInRange("debugVisibleBlockRadius", 6, 1, 32);
+
+        DEBUG_VISIBLE_BLOCK_MAX_ENTRIES = builder
+            .comment("Maximum number of block entries to include in a visible-block snapshot")
+            .defineInRange("debugVisibleBlockMaxEntries", 200, 10, 2000);
+
+        DEBUG_BROADCAST_VISIBLE_BLOCKS = builder
+            .comment("Dev mode: broadcast visible-block snapshots to all players (ignores debug UI subscription)")
+            .define("debugBroadcastVisibleBlocks", false);
         ENABLE_VIEW_COVERAGE_OVERLAY = builder
             .comment("Show view coverage summary and least-seen directions in the debug overlay")
             .define("enableViewCoverageOverlay", false);
