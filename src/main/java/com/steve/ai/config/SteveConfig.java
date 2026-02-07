@@ -17,6 +17,7 @@ public class SteveConfig {
     public static final ForgeConfigSpec.IntValue DEBUG_VISIBLE_BLOCK_RADIUS;
     public static final ForgeConfigSpec.IntValue DEBUG_VISIBLE_BLOCK_MAX_ENTRIES;
     public static final ForgeConfigSpec.BooleanValue DEBUG_BROADCAST_VISIBLE_BLOCKS;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_VIEW_COVERAGE_OVERLAY;
     
     // Ollama configuration
     public static final ForgeConfigSpec.ConfigValue<String> OLLAMA_BASE_URL;
@@ -99,6 +100,9 @@ public class SteveConfig {
         DEBUG_BROADCAST_VISIBLE_BLOCKS = builder
             .comment("Dev mode: broadcast visible-block snapshots to all players (ignores debug UI subscription)")
             .define("debugBroadcastVisibleBlocks", false);
+        ENABLE_VIEW_COVERAGE_OVERLAY = builder
+            .comment("Show view coverage summary and least-seen directions in the debug overlay")
+            .define("enableViewCoverageOverlay", false);
 
         MAX_ACTIVE_STEVES = builder
             .comment("Maximum number of Steves that can be active simultaneously")

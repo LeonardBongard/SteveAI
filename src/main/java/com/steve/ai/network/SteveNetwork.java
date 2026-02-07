@@ -2,20 +2,19 @@ package com.steve.ai.network;
 
 import com.steve.ai.SteveMod;
 import net.minecraft.resources.Identifier;
-import net.minecraftforge.network.ChannelBuilder;
-import net.minecraftforge.network.PacketDistributor;
-import net.minecraftforge.network.SimpleChannel;
-import net.minecraftforge.network.NetworkDirection;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraftforge.network.NetworkDirection;
+import net.minecraftforge.network.NetworkRegistry;
+import net.minecraftforge.network.PacketDistributor;
+import net.minecraftforge.network.simple.SimpleChannel;
 
 public final class SteveNetwork {
     private static final String PROTOCOL_VERSION = "1";
-    private static final Identifier CHANNEL_NAME = Identifier.fromNamespaceAndPath(SteveMod.MODID, "main");
-    private static final SimpleChannel CHANNEL = ChannelBuilder
-        .named(CHANNEL_NAME)
-        .networkProtocolVersion(PROTOCOL_VERSION)
+    private static final SimpleChannel CHANNEL = NetworkRegistry.ChannelBuilder
+        .named(Identifier.fromNamespaceAndPath(SteveMod.MODID, "main"))
         .clientAcceptedVersions(PROTOCOL_VERSION::equals)
         .serverAcceptedVersions(PROTOCOL_VERSION::equals)
+        .networkProtocolVersion(() -> PROTOCOL_VERSION)
         .simpleChannel();
 
     private static int packetId = 0;
@@ -24,24 +23,21 @@ public final class SteveNetwork {
     }
 
     public static void register() {
-        CHANNEL.messageBuilder(VisibleBlocksPacket.class, packetId++, NetworkDirection.PLAY_TO_CLIENT)
-            .encoder(VisibleBlocksPacket::encode)
-            .decoder(VisibleBlocksPacket::decode)
-            .consumerMainThread(VisibleBlocksPacket::handle)
-            .add();
-        CHANNEL.messageBuilder(DebugUiStatePacket.class, packetId++, NetworkDirection.PLAY_TO_SERVER)
-            .encoder(DebugUiStatePacket::encode)
-            .decoder(DebugUiStatePacket::decode)
-            .consumerMainThread(DebugUiStatePacket::handle)
+        CHANNEL.messageBuilder(SteveMessagePacket.class, nextId(), NetworkDirection.PLAY_TO_CLIENT)
+            .encoder(SteveMessagePacket::encode)
+            .decoder(SteveMessagePacket::decode)
+            .consumerMainThread(SteveMessagePacket::handle)
             .add();
     }
 
-    public static void sendToPlayer(ServerPlayer player, VisibleBlocksPacket packet) {
-        CHANNEL.send(packet, PacketDistributor.PLAYER.with(() -> player));
+    public static void sendToPlayer(ServerPlayer player, String steveName, String message) {
+        if (player == null) {
+            return;
+        }
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SteveMessagePacket(steveName, message));
     }
 
-    public static void sendDebugUiState(boolean enabled) {
-        CHANNEL.sendToServer(new DebugUiStatePacket(enabled));
+    private static int nextId() {
+        return packetId++;
     }
-
 }

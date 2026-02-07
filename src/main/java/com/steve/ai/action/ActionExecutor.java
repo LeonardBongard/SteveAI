@@ -11,11 +11,14 @@ import com.steve.ai.llm.ResponseParser;
 import com.steve.ai.llm.TaskPlanner;
 import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
+import com.steve.ai.network.SteveNetwork;
 import com.steve.ai.plugin.ActionRegistry;
 import com.steve.ai.plugin.PluginManager;
+import net.minecraft.server.level.ServerPlayer;
 
 import java.util.LinkedList;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -52,6 +55,7 @@ public class ActionExecutor {
     private final AgentStateMachine stateMachine;
     private final EventBus eventBus;
     private String lastDebugStatus;
+    private UUID lastCommandingPlayerId;
 
     public ActionExecutor(SteveEntity steve) {
         this.steve = steve;
@@ -62,6 +66,7 @@ public class ActionExecutor {
         this.planningFuture = null;
         this.pendingCommand = null;
         this.lastDebugStatus = null;
+        this.lastCommandingPlayerId = null;
 
         // Initialize plugin architecture components
         this.eventBus = new SimpleEventBus();
@@ -113,7 +118,12 @@ public class ActionExecutor {
      * @param command The natural language command from the user
      */
     public void processNaturalLanguageCommand(String command) {
+        processNaturalLanguageCommand(command, null);
+    }
+
+    public void processNaturalLanguageCommand(String command, ServerPlayer commandingPlayer) {
         SteveMod.LOGGER.info("Steve '{}' processing command (async): {}", steve.getSteveName(), command);
+        this.lastCommandingPlayerId = commandingPlayer != null ? commandingPlayer.getUUID() : null;
 
         // If already planning, ignore new commands
         if (isPlanning) {
@@ -218,6 +228,20 @@ public class ActionExecutor {
     private void sendToGUI(String steveName, String message) {
         if (steve.level().isClientSide()) {
             com.steve.ai.client.SteveGUI.addSteveMessage(steveName, message);
+            return;
+        }
+
+        if (lastCommandingPlayerId == null) {
+            return;
+        }
+
+        if (steve.level().getServer() == null) {
+            return;
+        }
+
+        ServerPlayer player = steve.level().getServer().getPlayerList().getPlayer(lastCommandingPlayerId);
+        if (player != null) {
+            SteveNetwork.sendToPlayer(player, steveName, message);
         }
     }
 
