@@ -261,7 +261,7 @@ model = "llama3.1:8b"
 apiKey = ""  # Optional, only for reverse proxy auth
 
 [behavior]
-blocksPerTick = 1  # Blocks placed per tick (1/20 second). Range: 1-100000. Higher = faster building!
+blocksPerTick = 1  # Blocks placed per tick (1/20 second). Range: 1-100,000. Higher = faster building!
 actionTickDelay = 20  # Ticks between action checks (20 ticks = 1 second)
 maxActiveSteves = 10  # Maximum Steves active simultaneously
 enableChatResponses = true  # Allow Steves to respond in chat
