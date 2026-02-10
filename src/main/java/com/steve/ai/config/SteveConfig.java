@@ -13,6 +13,7 @@ public class SteveConfig {
     public static final ForgeConfigSpec.BooleanValue ENABLE_CHAT_RESPONSES;
     public static final ForgeConfigSpec.IntValue MAX_ACTIVE_STEVES;
     public static final ForgeConfigSpec.BooleanValue ENABLE_DEBUG_OVERLAY;
+    public static final ForgeConfigSpec.IntValue BLOCKS_PER_TICK;
     
     // Ollama configuration
     public static final ForgeConfigSpec.ConfigValue<String> OLLAMA_BASE_URL;
@@ -83,6 +84,10 @@ public class SteveConfig {
         MAX_ACTIVE_STEVES = builder
             .comment("Maximum number of Steves that can be active simultaneously")
             .defineInRange("maxActiveSteves", 10, 1, 50);
+        
+        BLOCKS_PER_TICK = builder
+            .comment("Blocks placed per tick during building (1 tick = 1/20 second). Higher values = faster building. (Default: 1, Range: 1-100000)")
+            .defineInRange("blocksPerTick", 1, 1, 100000);
         
         builder.pop();
 
