@@ -4,6 +4,7 @@ import com.steve.ai.SteveMod;
 import com.steve.ai.action.ActionResult;
 import com.steve.ai.action.CollaborativeBuildManager;
 import com.steve.ai.action.Task;
+import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
 import com.steve.ai.memory.StructureRegistry;
 import com.steve.ai.structure.BlockPlacement;
@@ -34,7 +35,6 @@ public class BuildStructureAction extends BaseAction {
     private CollaborativeBuildManager.CollaborativeBuild collaborativeBuild; // For multi-Steve collaboration
     private boolean isCollaborative;
     private static final int MAX_TICKS = 120000;
-    private static final int BLOCKS_PER_TICK = 1;
     private static final double BUILD_SPEED_MULTIPLIER = 1.5;
 
     public BuildStructureAction(SteveEntity steve, Task task) {
@@ -200,7 +200,7 @@ public class BuildStructureAction extends BaseAction {
                 return;
             }
             
-            for (int i = 0; i < BLOCKS_PER_TICK; i++) {
+            for (int i = 0; i < SteveConfig.BLOCKS_PER_TICK.get(); i++) {
                 BlockPlacement placement = 
                     CollaborativeBuildManager.getNextBlock(collaborativeBuild, steve.getSteveName());
                 

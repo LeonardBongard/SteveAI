@@ -259,6 +259,13 @@ maxTokens = 1000
 baseUrl = "http://127.0.0.1:11434"
 model = "llama3.1:8b"
 apiKey = ""  # Optional, only for reverse proxy auth
+
+[behavior]
+blocksPerTick = 1  # Blocks placed per tick (1/20 second). Range: 1-100,000. Higher = faster building!
+actionTickDelay = 20  # Ticks between action checks (20 ticks = 1 second)
+maxActiveSteves = 10  # Maximum Steves active simultaneously
+enableChatResponses = true  # Allow Steves to respond in chat
+enableDebugOverlay = true  # Show debug info on screen
 ```
 
 **Performance Tips:**
@@ -266,6 +273,7 @@ apiKey = ""  # Optional, only for reverse proxy auth
 - Use Ollama for self-hosted, private inference (no API costs!)
 - GPT-4 for better planning but higher latency
 - Lower temperature (0.5-0.7) for more deterministic actions
+- **Increase `blocksPerTick` (e.g., 1000 or 50000) for instant structure building!** Default is 1 for realistic building animation.
 
 **Self-Hosted with Ollama:**
 1. Install Ollama from [ollama.com](https://ollama.com)
