@@ -1,14 +1,15 @@
 package com.steve.ai.action;
 
 import java.util.Map;
+import java.util.HashMap;
 
 public class Task {
     private final String action;
     private final Map<String, Object> parameters;
 
     public Task(String action, Map<String, Object> parameters) {
-        this.action = action;
-        this.parameters = parameters;
+        this.action = action == null ? "" : action;
+        this.parameters = parameters == null ? new HashMap<>() : new HashMap<>(parameters);
     }
 
     public String getAction() {
@@ -55,4 +56,3 @@ public class Task {
         return "Task{action='" + action + "', parameters=" + parameters + "}";
     }
 }
-

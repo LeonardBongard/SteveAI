@@ -8,10 +8,14 @@ import com.steve.ai.llm.async.*;
 import com.steve.ai.llm.resilience.LLMFallbackHandler;
 import com.steve.ai.llm.resilience.ResilientLLMClient;
 import com.steve.ai.memory.WorldKnowledge;
+import com.steve.ai.validation.MinecraftLegalityChecker;
 
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.ArrayList;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 public class TaskPlanner {
     // Legacy synchronous clients (for backward compatibility)
@@ -30,6 +34,8 @@ public class TaskPlanner {
 
     private static final String GROQ_DEFAULT_MODEL = "llama-3.1-8b-instant";
     private static final String GEMINI_DEFAULT_MODEL = "gemini-1.5-flash";
+    private static final Pattern PICKAXE_INTENT =
+        Pattern.compile(".*\\b(craft|make|create|get|obtain|build)\\b.*\\bpickaxe\\b.*", Pattern.CASE_INSENSITIVE);
 
     public TaskPlanner() {
         // Legacy clients
@@ -90,9 +96,9 @@ public class TaskPlanner {
                 return null;
             }
             
-            SteveMod.LOGGER.info("Plan: {} ({} tasks)", parsedResponse.getPlan(), parsedResponse.getTasks().size());
-            
-            return parsedResponse;
+            ResponseParser.ParsedResponse guarded = applyCommandTaskGuards(command, parsedResponse);
+            SteveMod.LOGGER.info("Plan: {} ({} tasks)", guarded.getPlan(), guarded.getTasks().size());
+            return guarded;
             
         } catch (Exception e) {
             SteveMod.LOGGER.error("Error planning tasks", e);
@@ -173,14 +179,15 @@ public class TaskPlanner {
                         return null;
                     }
 
+                    ResponseParser.ParsedResponse guarded = applyCommandTaskGuards(command, parsed);
                     SteveMod.LOGGER.info("[Async] Plan received: {} ({} tasks, {}ms, {} tokens, cache: {})",
-                        parsed.getPlan(),
-                        parsed.getTasks().size(),
+                        guarded.getPlan(),
+                        guarded.getTasks().size(),
                         response.getLatencyMs(),
                         response.getTokensUsed(),
                         response.isFromCache());
 
-                    return parsed;
+                    return guarded;
                 })
                 .exceptionally(throwable -> {
                     SteveMod.LOGGER.error("[Async] Error planning tasks: {}", throwable.getMessage());
@@ -243,26 +250,139 @@ public class TaskPlanner {
 
     public boolean validateTask(Task task) {
         String action = task.getAction();
-        
-        return switch (action) {
+        java.util.Map<String, Object> p = task.getParameters();
+        boolean hasQuantity = p.containsKey("quantity") || p.containsKey("count");
+
+        boolean schemaValid = switch (action) {
             case "pathfind" -> task.hasParameters("x", "y", "z");
-            case "mine" -> task.hasParameters("block", "quantity");
+            case "mine" -> (p.containsKey("block") || p.containsKey("blockType")) && hasQuantity;
             case "place" -> task.hasParameters("block", "x", "y", "z");
-            case "craft" -> task.hasParameters("item", "quantity");
+            case "craft" -> (p.containsKey("item") || p.containsKey("recipe")) && hasQuantity;
+            case "smelt" -> p.containsKey("item") && hasQuantity;
             case "attack" -> task.hasParameters("target");
-            case "follow" -> task.hasParameters("player");
-            case "gather" -> task.hasParameters("resource", "quantity");
+            case "feed" -> p.containsKey("species") && hasQuantity;
+            case "follow" -> p.containsKey("player") || p.containsKey("playerName");
+            case "gather" -> p.containsKey("resource") && hasQuantity;
+            case "farm" -> p.containsKey("crop") && hasQuantity;
+            case "retrieve_chest" -> p.containsKey("item") && hasQuantity;
             case "build" -> task.hasParameters("structure", "blocks", "dimensions");
             default -> {
                 SteveMod.LOGGER.warn("Unknown action type: {}", action);
                 yield false;
             }
         };
+        if (!schemaValid) {
+            return false;
+        }
+
+        MinecraftLegalityChecker.CheckResult legal = MinecraftLegalityChecker.validateTaskDefinition(task);
+        if (!legal.legal()) {
+            SteveMod.LOGGER.warn("[LEGALITY] Rejected task action={} reason={} params={}", action, legal.reason(), p);
+            return false;
+        }
+        return true;
     }
 
     public List<Task> validateAndFilterTasks(List<Task> tasks) {
         return tasks.stream()
             .filter(this::validateTask)
             .toList();
+    }
+
+    private ResponseParser.ParsedResponse applyCommandTaskGuards(String command, ResponseParser.ParsedResponse parsed) {
+        if (parsed == null) {
+            return null;
+        }
+        String targetPickaxe = detectTargetPickaxe(command);
+        if (targetPickaxe == null) {
+            return parsed;
+        }
+
+        List<Task> tasks = parsed.getTasks();
+        if (tasks == null || tasks.isEmpty()) {
+            List<Task> guardedTasks = new ArrayList<>();
+            guardedTasks.add(new Task("craft", Map.of("item", targetPickaxe, "quantity", 1)));
+            SteveMod.LOGGER.info("[PLAN_GUARD] Added missing craft task for '{}'", targetPickaxe);
+            return new ResponseParser.ParsedResponse(parsed.getReasoning(), parsed.getPlan(), guardedTasks);
+        }
+
+        boolean alreadyCraftsTarget = tasks.stream().anyMatch(task -> {
+            if (task == null || task.getAction() == null || task.getParameters() == null) {
+                return false;
+            }
+            if (!"craft".equalsIgnoreCase(task.getAction())) {
+                return false;
+            }
+            String item = firstNonBlank(
+                toStringOrNull(task.getParameters().get("item")),
+                toStringOrNull(task.getParameters().get("recipe"))
+            );
+            return item != null && normalizeItemName(item).endsWith(targetPickaxe);
+        });
+        if (alreadyCraftsTarget) {
+            return parsed;
+        }
+
+        List<Task> guardedTasks = new ArrayList<>(tasks);
+        guardedTasks.add(new Task("craft", Map.of("item", targetPickaxe, "quantity", 1)));
+        SteveMod.LOGGER.info("[PLAN_GUARD] Appended craft task for '{}' to prevent shallow tool plan", targetPickaxe);
+        return new ResponseParser.ParsedResponse(parsed.getReasoning(), parsed.getPlan(), guardedTasks);
+    }
+
+    private String detectTargetPickaxe(String command) {
+        if (command == null || command.isBlank()) {
+            return null;
+        }
+        String lower = command.toLowerCase(Locale.ROOT);
+        if (!PICKAXE_INTENT.matcher(lower).matches()) {
+            return null;
+        }
+        if (lower.contains("wooden pickaxe") || lower.contains("wood pickaxe")) {
+            return "wooden_pickaxe";
+        }
+        if (lower.contains("stone pickaxe")) {
+            return "stone_pickaxe";
+        }
+        if (lower.contains("iron pickaxe")) {
+            return "iron_pickaxe";
+        }
+        if (lower.contains("gold pickaxe") || lower.contains("golden pickaxe")) {
+            return "golden_pickaxe";
+        }
+        if (lower.contains("diamond pickaxe")) {
+            return "diamond_pickaxe";
+        }
+        if (lower.contains("netherite pickaxe")) {
+            return "netherite_pickaxe";
+        }
+        return "wooden_pickaxe";
+    }
+
+    private String toStringOrNull(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.toString().trim();
+        return value.isEmpty() ? null : value;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String normalizeItemName(String item) {
+        String normalized = item.toLowerCase(Locale.ROOT).replace(" ", "_");
+        if (!normalized.contains(":")) {
+            normalized = "minecraft:" + normalized;
+        }
+        return normalized;
     }
 }

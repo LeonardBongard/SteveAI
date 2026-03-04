@@ -142,7 +142,7 @@ public class AsyncGeminiClient implements AsyncLLMClient {
 
         // Combine system prompt and user prompt into a single user message
         // (Gemini handles system instructions differently)
-        String systemPrompt = (String) params.get("systemPrompt");
+        String systemPrompt = AsyncClientParamUtil.stringParam(params.get("systemPrompt"), null);
         String combinedPrompt = systemPrompt != null && !systemPrompt.isEmpty()
             ? systemPrompt + "\n\n" + prompt
             : prompt;
@@ -162,8 +162,8 @@ public class AsyncGeminiClient implements AsyncLLMClient {
 
         // Generation config
         JsonObject generationConfig = new JsonObject();
-        double tempToUse = (double) params.getOrDefault("temperature", this.temperature);
-        int maxTokensToUse = (int) params.getOrDefault("maxTokens", this.maxTokens);
+        double tempToUse = AsyncClientParamUtil.doubleParam(params.get("temperature"), this.temperature);
+        int maxTokensToUse = AsyncClientParamUtil.intParam(params.get("maxTokens"), this.maxTokens);
 
         generationConfig.addProperty("temperature", tempToUse);
         generationConfig.addProperty("maxOutputTokens", maxTokensToUse);
@@ -242,7 +242,16 @@ public class AsyncGeminiClient implements AsyncLLMClient {
                 );
             }
 
-            String text = parts.get(0).getAsJsonObject().get("text").getAsString();
+            JsonObject firstPart = parts.get(0).getAsJsonObject();
+            if (!firstPart.has("text")) {
+                throw new LLMException(
+                    "Gemini response part missing 'text'",
+                    LLMException.ErrorType.INVALID_RESPONSE,
+                    PROVIDER_ID,
+                    false
+                );
+            }
+            String text = firstPart.get("text").getAsString();
 
             // Gemini doesn't always provide usage metrics
             int tokensUsed = 0;

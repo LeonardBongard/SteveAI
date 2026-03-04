@@ -2,6 +2,7 @@ package com.steve.ai.memory;
 
 import com.steve.ai.entity.SteveEntity;
 import com.mojang.serialization.Codec;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 
@@ -13,7 +14,11 @@ import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.Queue;
+import java.util.Set;
+import java.util.LinkedHashMap;
 
 public class SteveMemory {
     private final SteveEntity steve;
@@ -23,8 +28,14 @@ public class SteveMemory {
     private final Deque<ViewSample> viewSamples;
     private final PerceptionCache perceptionCache;
     private List<VisibleBlockEntry> visibleBlocks;
+    private final Map<BlockPos, ChestMemoryEntry> knownChests;
+    private final Map<Long, Map<String, EpisodicObservation>> episodicByChunk;
+    private final Map<String, SemanticStat> semanticStats;
+    private final Map<String, Set<Long>> semanticSeenChunks;
     private static final int MAX_RECENT_ACTIONS = 20;
     private static final int MAX_VIEW_SAMPLES = 160;
+    private static final int MAX_EPISODIC_CHUNKS = 256;
+    private static final int MAX_EPISODIC_PER_CHUNK = 20;
     private static final String[] YAW_LABELS = {"S", "SW", "W", "NW", "N", "NE", "E", "SE"};
     private static final String[] PITCH_LABELS = {"Up", "Level", "Down"};
 
@@ -36,6 +47,10 @@ public class SteveMemory {
         this.viewSamples = new ArrayDeque<>();
         this.perceptionCache = new PerceptionCache();
         this.visibleBlocks = new ArrayList<>();
+        this.knownChests = new HashMap<>();
+        this.episodicByChunk = new LinkedHashMap<>();
+        this.semanticStats = new HashMap<>();
+        this.semanticSeenChunks = new HashMap<>();
     }
 
     public String getCurrentGoal() {
@@ -71,6 +86,7 @@ public class SteveMemory {
 
     public void setVisibleBlocks(List<VisibleBlockEntry> visibleBlocks) {
         this.visibleBlocks = new ArrayList<>(visibleBlocks);
+        ingestVisibleSnapshot(this.visibleBlocks);
     }
 
     public void clearTaskQueue() {
@@ -136,12 +152,148 @@ public class SteveMemory {
         return perceptionCache;
     }
 
+    public void rememberChestContents(BlockPos pos, Map<String, Integer> contents, long tick) {
+        if (pos == null) {
+            return;
+        }
+        Map<String, Integer> sanitized = new HashMap<>();
+        if (contents != null) {
+            for (Map.Entry<String, Integer> entry : contents.entrySet()) {
+                String itemId = entry.getKey();
+                Integer count = entry.getValue();
+                if (itemId == null || itemId.isBlank() || count == null || count <= 0) {
+                    continue;
+                }
+                sanitized.put(itemId, count);
+            }
+        }
+        knownChests.put(pos.immutable(), new ChestMemoryEntry(pos.immutable(), sanitized, tick));
+    }
+
+    public List<ChestMemoryEntry> getKnownChests() {
+        return List.copyOf(knownChests.values());
+    }
+
+    public EpisodicTarget findBestEpisodicTarget(
+        Set<String> candidateBlockIds,
+        BlockPos origin,
+        long nowTick,
+        int maxDistance
+    ) {
+        if (candidateBlockIds == null || candidateBlockIds.isEmpty() || origin == null || maxDistance <= 0) {
+            return null;
+        }
+        double maxDistSqr = (double) maxDistance * maxDistance;
+        EpisodicTarget best = null;
+
+        for (Map<String, EpisodicObservation> chunkMap : episodicByChunk.values()) {
+            for (EpisodicObservation observation : chunkMap.values()) {
+                if (!candidateBlockIds.contains(observation.blockId())) {
+                    continue;
+                }
+                double distSqr = origin.distSqr(observation.position());
+                if (distSqr > maxDistSqr) {
+                    continue;
+                }
+                long age = Math.max(0, nowTick - observation.lastSeenTick());
+                double freshness = Math.max(0.08, 1.0 - (age / 24000.0));
+                double distancePenalty = 1.0 / (1.0 + (Math.sqrt(distSqr) / 24.0));
+                double confidence = Math.max(0.05, observation.confidence());
+                double score = confidence * freshness * distancePenalty;
+                if (best == null || score > best.score()) {
+                    best = new EpisodicTarget(
+                        observation.blockId(),
+                        observation.position(),
+                        (float) score,
+                        age,
+                        observation.confidence(),
+                        observation.seenCount()
+                    );
+                }
+            }
+        }
+        return best;
+    }
+
+    public List<BlockPos> getEpisodicPositions(int maxPositions) {
+        if (maxPositions <= 0 || episodicByChunk.isEmpty()) {
+            return List.of();
+        }
+        // Multi-chunk balanced export:
+        // take top observations per chunk and round-robin so one hot chunk does not crowd out others.
+        List<List<EpisodicObservation>> perChunk = new ArrayList<>();
+        for (Map<String, EpisodicObservation> chunkMap : episodicByChunk.values()) {
+            List<EpisodicObservation> rows = new ArrayList<>(chunkMap.values());
+            rows.sort(Comparator
+                .comparingLong(EpisodicObservation::lastSeenTick).reversed()
+                .thenComparing(EpisodicObservation::confidence, Comparator.reverseOrder())
+                .thenComparingInt(EpisodicObservation::seenCount).reversed());
+            perChunk.add(rows);
+        }
+        perChunk.sort((a, b) -> Long.compare(newestTickOfList(b), newestTickOfList(a)));
+
+        List<BlockPos> out = new ArrayList<>(Math.min(maxPositions, getEpisodicObservationCount()));
+        int depth = 0;
+        while (out.size() < maxPositions) {
+            boolean progressed = false;
+            for (List<EpisodicObservation> chunkRows : perChunk) {
+                if (depth < chunkRows.size()) {
+                    out.add(chunkRows.get(depth).position());
+                    progressed = true;
+                    if (out.size() >= maxPositions) {
+                        break;
+                    }
+                }
+            }
+            if (!progressed) {
+                break;
+            }
+            depth++;
+        }
+        return out;
+    }
+
+    public int getEpisodicObservationCount() {
+        int total = 0;
+        for (Map<String, EpisodicObservation> chunkMap : episodicByChunk.values()) {
+            total += chunkMap.size();
+        }
+        return total;
+    }
+
+    public String getSemanticSummary(int maxItems) {
+        if (semanticStats.isEmpty()) {
+            return "No semantic memory";
+        }
+        List<Map.Entry<String, SemanticStat>> rows = new ArrayList<>(semanticStats.entrySet());
+        rows.sort(Comparator
+            .comparingInt((Map.Entry<String, SemanticStat> e) -> e.getValue().totalSeen()).reversed()
+            .thenComparingInt(e -> e.getValue().chunkSeenCount()).reversed());
+
+        StringBuilder sb = new StringBuilder();
+        int shown = Math.min(maxItems, rows.size());
+        for (int i = 0; i < shown; i++) {
+            if (i > 0) {
+                sb.append(", ");
+            }
+            Map.Entry<String, SemanticStat> row = rows.get(i);
+            String shortId = shortId(row.getKey());
+            sb.append(shortId)
+                .append(" seen=").append(row.getValue().totalSeen())
+                .append(" chunks=").append(row.getValue().chunkSeenCount());
+        }
+        if (rows.size() > shown) {
+            sb.append(" ...");
+        }
+        return sb.toString();
+    }
+
     public List<VisibleBlock> getVisibleBlocksSnapshot() {
         return perceptionCache.getVisibleBlocks();
     }
 
     public void saveToNBT(ValueOutput output) {
-        output.putString("CurrentGoal", currentGoal);
+        output.putString("CurrentGoal", currentGoal == null ? "" : currentGoal);
 
         ValueOutput.TypedOutputList<String> actionsList = output.list("RecentActions", Codec.STRING);
         for (String action : recentActions) {
@@ -200,4 +352,135 @@ public class SteveMemory {
     private record ViewSample(float yaw, float pitch, long timestamp) {}
 
     private record DirectionCoverage(String label, int count) {}
+
+    public record ChestMemoryEntry(BlockPos position, Map<String, Integer> items, long lastSeenTick) {}
+
+    public record EpisodicTarget(
+        String blockId,
+        BlockPos position,
+        float score,
+        long ageTicks,
+        float confidence,
+        int seenCount
+    ) {}
+
+    private record EpisodicObservation(
+        String blockId,
+        BlockPos position,
+        long lastSeenTick,
+        int seenCount,
+        float confidence
+    ) {}
+
+    private record SemanticStat(
+        int totalSeen,
+        int chunkSeenCount,
+        long lastSeenTick
+    ) {}
+
+    private void ingestVisibleSnapshot(List<VisibleBlockEntry> snapshot) {
+        if (snapshot == null || snapshot.isEmpty()) {
+            return;
+        }
+        for (VisibleBlockEntry entry : snapshot) {
+            if (entry == null || entry.position() == null || entry.blockId() == null || entry.blockId().isBlank()) {
+                continue;
+            }
+            long chunkKey = chunkKey(entry.position());
+            Map<String, EpisodicObservation> chunkMap = episodicByChunk.computeIfAbsent(chunkKey, k -> new HashMap<>());
+            EpisodicObservation prev = chunkMap.get(entry.blockId());
+            if (prev == null) {
+                chunkMap.put(
+                    entry.blockId(),
+                    new EpisodicObservation(entry.blockId(), entry.position().immutable(), entry.lastSeenTick(), 1, 0.35F)
+                );
+            } else {
+                float confidence = Math.min(1.0F, prev.confidence() + 0.08F);
+                chunkMap.put(
+                    entry.blockId(),
+                    new EpisodicObservation(
+                        entry.blockId(),
+                        entry.position().immutable(),
+                        entry.lastSeenTick(),
+                        prev.seenCount() + 1,
+                        confidence
+                    )
+                );
+            }
+
+            Set<Long> blockChunks = semanticSeenChunks.computeIfAbsent(entry.blockId(), k -> new java.util.HashSet<>());
+            boolean firstChunkVisitForBlock = blockChunks.add(chunkKey);
+            SemanticStat semantic = semanticStats.get(entry.blockId());
+            if (semantic == null) {
+                semanticStats.put(entry.blockId(), new SemanticStat(1, 1, entry.lastSeenTick()));
+            } else {
+                int chunkSeen = semantic.chunkSeenCount() + (firstChunkVisitForBlock ? 1 : 0);
+                semanticStats.put(
+                    entry.blockId(),
+                    new SemanticStat(semantic.totalSeen() + 1, chunkSeen, entry.lastSeenTick())
+                );
+            }
+        }
+
+        trimEpisodicMemory();
+    }
+
+    private void trimEpisodicMemory() {
+        if (episodicByChunk.isEmpty()) {
+            return;
+        }
+        for (Map<String, EpisodicObservation> chunkMap : episodicByChunk.values()) {
+            if (chunkMap.size() <= MAX_EPISODIC_PER_CHUNK) {
+                continue;
+            }
+            List<Map.Entry<String, EpisodicObservation>> rows = new ArrayList<>(chunkMap.entrySet());
+            rows.sort(Comparator
+                .comparingLong((Map.Entry<String, EpisodicObservation> e) -> e.getValue().lastSeenTick()).reversed()
+                .thenComparing(e -> e.getValue().confidence(), Comparator.reverseOrder()));
+            chunkMap.clear();
+            for (int i = 0; i < Math.min(MAX_EPISODIC_PER_CHUNK, rows.size()); i++) {
+                Map.Entry<String, EpisodicObservation> row = rows.get(i);
+                chunkMap.put(row.getKey(), row.getValue());
+            }
+        }
+
+        if (episodicByChunk.size() > MAX_EPISODIC_CHUNKS) {
+            List<Map.Entry<Long, Map<String, EpisodicObservation>>> chunks = new ArrayList<>(episodicByChunk.entrySet());
+            chunks.sort(Comparator.comparingLong(e -> newestTickInChunk(e.getValue())));
+            int toRemove = episodicByChunk.size() - MAX_EPISODIC_CHUNKS;
+            for (int i = 0; i < toRemove; i++) {
+                episodicByChunk.remove(chunks.get(i).getKey());
+            }
+        }
+    }
+
+    private long newestTickInChunk(Map<String, EpisodicObservation> chunk) {
+        long newest = Long.MIN_VALUE;
+        for (EpisodicObservation obs : chunk.values()) {
+            newest = Math.max(newest, obs.lastSeenTick());
+        }
+        return newest == Long.MIN_VALUE ? 0L : newest;
+    }
+
+    private long newestTickOfList(List<EpisodicObservation> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0L;
+        }
+        long newest = 0L;
+        for (EpisodicObservation obs : rows) {
+            newest = Math.max(newest, obs.lastSeenTick());
+        }
+        return newest;
+    }
+
+    private long chunkKey(BlockPos pos) {
+        long x = pos.getX() >> 4;
+        long z = pos.getZ() >> 4;
+        return (x & 0xffffffffL) << 32 | (z & 0xffffffffL);
+    }
+
+    private String shortId(String namespaced) {
+        int idx = namespaced.indexOf(':');
+        return idx >= 0 ? namespaced.substring(idx + 1) : namespaced;
+    }
 }

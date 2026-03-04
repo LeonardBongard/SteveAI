@@ -134,9 +134,9 @@ public class AsyncOllamaClient implements AsyncLLMClient {
     private String buildRequestBody(String prompt, Map<String, Object> params) {
         JsonObject body = new JsonObject();
 
-        String modelToUse = (String) params.getOrDefault("model", this.model);
-        int maxTokensToUse = (int) params.getOrDefault("maxTokens", this.maxTokens);
-        double tempToUse = (double) params.getOrDefault("temperature", this.temperature);
+        String modelToUse = AsyncClientParamUtil.stringParam(params.get("model"), this.model);
+        int maxTokensToUse = AsyncClientParamUtil.intParam(params.get("maxTokens"), this.maxTokens);
+        double tempToUse = AsyncClientParamUtil.doubleParam(params.get("temperature"), this.temperature);
 
         body.addProperty("model", modelToUse);
         body.addProperty("stream", false);
@@ -150,7 +150,7 @@ public class AsyncOllamaClient implements AsyncLLMClient {
         JsonArray messages = new JsonArray();
 
         // System message
-        String systemPrompt = (String) params.get("systemPrompt");
+        String systemPrompt = AsyncClientParamUtil.stringParam(params.get("systemPrompt"), null);
         if (systemPrompt != null && !systemPrompt.isEmpty()) {
             JsonObject systemMessage = new JsonObject();
             systemMessage.addProperty("role", "system");

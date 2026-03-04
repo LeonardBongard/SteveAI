@@ -1,17 +1,21 @@
 package com.steve.ai.command;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.FloatArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.steve.ai.SteveMod;
 import com.steve.ai.entity.SteveEntity;
 import com.steve.ai.entity.SteveManager;
+import com.steve.ai.execution.SafetySnapshot;
+import com.steve.ai.testing.StevePlaytestRunner;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -52,6 +56,41 @@ public class SteveCommands {
                 .then(Commands.argument("name", StringArgumentType.string())
                     .then(Commands.argument("command", StringArgumentType.greedyString())
                         .executes(SteveCommands::tellSteve))))
+            .then(Commands.literal("debug")
+                .then(Commands.argument("name", StringArgumentType.string())
+                    .then(Commands.literal("status")
+                        .executes(SteveCommands::debugStatus))
+                    .then(Commands.literal("safety")
+                        .executes(SteveCommands::debugSafety))
+                    .then(Commands.literal("hearts")
+                        .then(Commands.argument("value", IntegerArgumentType.integer(0, 10))
+                            .executes(SteveCommands::debugSetHearts)))
+                    .then(Commands.literal("health")
+                        .then(Commands.argument("value", FloatArgumentType.floatArg(0.0f, 20.0f))
+                            .executes(SteveCommands::debugSetHealth)))
+                    .then(Commands.literal("food")
+                        .then(Commands.argument("value", IntegerArgumentType.integer(0, 20))
+                            .executes(SteveCommands::debugSetFood)))
+                    .then(Commands.literal("saturation")
+                        .then(Commands.argument("value", FloatArgumentType.floatArg(0.0f, 20.0f))
+                            .executes(SteveCommands::debugSetSaturation)))))
+            .then(Commands.literal("test")
+                .then(Commands.literal("iron_pickaxe")
+                    .then(Commands.argument("name", StringArgumentType.string())
+                        .executes(ctx -> runIronPickaxeTest(ctx, StevePlaytestRunner.defaultTimeoutSeconds()))
+                        .then(Commands.argument("timeoutSeconds", IntegerArgumentType.integer(30, 1800))
+                            .executes(ctx -> runIronPickaxeTest(
+                                ctx,
+                                IntegerArgumentType.getInteger(ctx, "timeoutSeconds")
+                            )))))
+                .then(Commands.literal("iron_pickaxe_spawn")
+                    .then(Commands.argument("name", StringArgumentType.string())
+                        .executes(ctx -> spawnAndRunIronPickaxeTest(ctx, StevePlaytestRunner.defaultTimeoutSeconds()))
+                        .then(Commands.argument("timeoutSeconds", IntegerArgumentType.integer(30, 1800))
+                            .executes(ctx -> spawnAndRunIronPickaxeTest(
+                                ctx,
+                                IntegerArgumentType.getInteger(ctx, "timeoutSeconds")
+                            ))))))
         );
     }
 
@@ -67,14 +106,7 @@ public class SteveCommands {
 
         SteveManager manager = SteveMod.getSteveManager();
         
-        Vec3 sourcePos = source.getPosition();
-        if (source.getEntity() != null) {
-            Vec3 lookVec = source.getEntity().getLookAngle();
-            sourcePos = sourcePos.add(lookVec.x * 3, 0, lookVec.z * 3);
-        } else {
-            sourcePos = sourcePos.add(3, 0, 0);
-        }
-        Vec3 spawnPos = sourcePos;
+        Vec3 spawnPos = resolveSpawnPos(source);
         
         SteveEntity steve = manager.spawnSteve(serverLevel, spawnPos, name);
         if (steve != null) {
@@ -236,6 +268,169 @@ public class SteveCommands {
         dropItemStack(steve, extracted);
         source.sendSuccess(() -> Component.literal("Dropped " + extracted.getCount() + " " + itemName + " from " + name), false);
         return 1;
+    }
+
+    private static int debugStatus(CommandContext<CommandSourceStack> context) {
+        SteveEntity steve = getSteveByName(context);
+        if (steve == null) {
+            return 0;
+        }
+        SafetySnapshot safety = steve.getActionExecutor().getCurrentSafetySnapshot();
+        context.getSource().sendSuccess(() -> Component.literal(
+            "Debug status for " + steve.getSteveName()
+                + " | health=" + formatFloat(steve.getHealth())
+                + "/" + formatFloat(steve.getMaxHealth())
+                + " | hearts=" + formatFloat(steve.getHealth() / 2.0f)
+                + " | food=" + steve.getFoodLevel()
+                + " | saturation=" + formatFloat(steve.getSaturationLevel())
+                + " | safety=" + safety.state()
+                + ":" + safety.safetyScore()
+                + ":" + safety.recommendedDecision()
+                + " | panic=" + safety.panicLevel()
+                + ":" + safety.panicScore()
+        ), false);
+        return 1;
+    }
+
+    private static int debugSafety(CommandContext<CommandSourceStack> context) {
+        SteveEntity steve = getSteveByName(context);
+        if (steve == null) {
+            return 0;
+        }
+        SafetySnapshot safety = steve.getActionExecutor().getCurrentSafetySnapshot();
+        String reasons = safety.reasons().isEmpty() ? "none" : String.join(",", safety.reasons());
+        String retreat = safety.retreatTarget() == null
+            ? "none"
+            : safety.retreatTarget().getX() + "," + safety.retreatTarget().getY() + "," + safety.retreatTarget().getZ();
+        context.getSource().sendSuccess(() -> Component.literal(
+            "Safety for " + steve.getSteveName()
+                + " | state=" + safety.state()
+                + " | score=" + safety.safetyScore()
+                + " | decision=" + safety.recommendedDecision()
+                + " | panic=" + safety.panicLevel() + ":" + safety.panicScore()
+                + " | reasons=" + reasons
+                + " | retreat=" + retreat
+        ), false);
+        return 1;
+    }
+
+    private static int debugSetHearts(CommandContext<CommandSourceStack> context) {
+        SteveEntity steve = getSteveByName(context);
+        if (steve == null) {
+            return 0;
+        }
+        int hearts = IntegerArgumentType.getInteger(context, "value");
+        float health = Math.max(0.0f, Math.min(20.0f, hearts * 2.0f));
+        steve.setHealth(health);
+        context.getSource().sendSuccess(() -> Component.literal(
+            "Set " + steve.getSteveName() + " hearts to " + hearts + " (health=" + formatFloat(health) + ")"
+        ), true);
+        return 1;
+    }
+
+    private static int debugSetHealth(CommandContext<CommandSourceStack> context) {
+        SteveEntity steve = getSteveByName(context);
+        if (steve == null) {
+            return 0;
+        }
+        float health = FloatArgumentType.getFloat(context, "value");
+        steve.setHealth(Math.max(0.0f, Math.min(health, steve.getMaxHealth())));
+        context.getSource().sendSuccess(() -> Component.literal(
+            "Set " + steve.getSteveName() + " health to " + formatFloat(steve.getHealth())
+        ), true);
+        return 1;
+    }
+
+    private static int debugSetFood(CommandContext<CommandSourceStack> context) {
+        SteveEntity steve = getSteveByName(context);
+        if (steve == null) {
+            return 0;
+        }
+        int food = IntegerArgumentType.getInteger(context, "value");
+        steve.setFoodLevel(food);
+        context.getSource().sendSuccess(() -> Component.literal(
+            "Set " + steve.getSteveName() + " food to " + steve.getFoodLevel()
+        ), true);
+        return 1;
+    }
+
+    private static int debugSetSaturation(CommandContext<CommandSourceStack> context) {
+        SteveEntity steve = getSteveByName(context);
+        if (steve == null) {
+            return 0;
+        }
+        float saturation = FloatArgumentType.getFloat(context, "value");
+        steve.setSaturationLevel(saturation);
+        context.getSource().sendSuccess(() -> Component.literal(
+            "Set " + steve.getSteveName() + " saturation to " + formatFloat(steve.getSaturationLevel())
+        ), true);
+        return 1;
+    }
+
+    private static int runIronPickaxeTest(CommandContext<CommandSourceStack> context, int timeoutSeconds) {
+        String name = StringArgumentType.getString(context, "name");
+        SteveEntity steve = SteveMod.getSteveManager().getSteve(name);
+        if (steve == null) {
+            context.getSource().sendFailure(Component.literal("Steve not found: " + name));
+            return 0;
+        }
+        ServerPlayer requester = context.getSource().getPlayer();
+        if (requester == null) {
+            context.getSource().sendFailure(Component.literal("Command must be run by a player"));
+            return 0;
+        }
+        return StevePlaytestRunner.startIronPickaxe(requester, steve, timeoutSeconds);
+    }
+
+    private static int spawnAndRunIronPickaxeTest(CommandContext<CommandSourceStack> context, int timeoutSeconds) {
+        CommandSourceStack source = context.getSource();
+        ServerPlayer requester = source.getPlayer();
+        if (requester == null) {
+            source.sendFailure(Component.literal("Command must be run by a player"));
+            return 0;
+        }
+
+        String name = StringArgumentType.getString(context, "name");
+        ServerLevel serverLevel = source.getLevel();
+        if (serverLevel == null) {
+            source.sendFailure(Component.literal("Command must be run on server"));
+            return 0;
+        }
+
+        SteveManager manager = SteveMod.getSteveManager();
+        SteveEntity existing = manager.getSteve(name);
+        if (existing != null) {
+            manager.removeSteve(name);
+        }
+
+        SteveEntity steve = manager.spawnSteve(serverLevel, resolveSpawnPos(source), name);
+        if (steve == null) {
+            source.sendFailure(Component.literal("Failed to spawn Steve: " + name));
+            return 0;
+        }
+        return StevePlaytestRunner.startIronPickaxe(requester, steve, timeoutSeconds);
+    }
+
+    private static SteveEntity getSteveByName(CommandContext<CommandSourceStack> context) {
+        String name = StringArgumentType.getString(context, "name");
+        SteveEntity steve = SteveMod.getSteveManager().getSteve(name);
+        if (steve == null) {
+            context.getSource().sendFailure(Component.literal("Steve not found: " + name));
+        }
+        return steve;
+    }
+
+    private static String formatFloat(float value) {
+        return String.format(java.util.Locale.ROOT, "%.2f", value);
+    }
+
+    private static Vec3 resolveSpawnPos(CommandSourceStack source) {
+        Vec3 sourcePos = source.getPosition();
+        if (source.getEntity() != null) {
+            Vec3 lookVec = source.getEntity().getLookAngle();
+            return sourcePos.add(lookVec.x * 3, 0, lookVec.z * 3);
+        }
+        return sourcePos.add(3, 0, 0);
     }
 
     private static Item parseItem(String itemName) {

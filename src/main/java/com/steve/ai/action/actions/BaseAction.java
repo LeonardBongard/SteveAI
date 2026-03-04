@@ -24,6 +24,9 @@ public abstract class BaseAction {
 
     public void tick() {
         if (!started || isComplete()) return;
+        if (steve.getActionExecutor() != null && !steve.getActionExecutor().allowActionTick(this)) {
+            return;
+        }
         onTick();
     }
 
@@ -41,10 +44,13 @@ public abstract class BaseAction {
         return result;
     }
 
+    public Task getTask() {
+        return task;
+    }
+
     protected abstract void onStart();
     protected abstract void onTick();
     protected abstract void onCancel();
     
     public abstract String getDescription();
 }
-

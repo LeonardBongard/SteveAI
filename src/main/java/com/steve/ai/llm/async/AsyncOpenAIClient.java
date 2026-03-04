@@ -138,9 +138,9 @@ public class AsyncOpenAIClient implements AsyncLLMClient {
         JsonObject body = new JsonObject();
 
         // Use params if provided, otherwise use instance defaults
-        String modelToUse = (String) params.getOrDefault("model", this.model);
-        int maxTokensToUse = (int) params.getOrDefault("maxTokens", this.maxTokens);
-        double tempToUse = (double) params.getOrDefault("temperature", this.temperature);
+        String modelToUse = AsyncClientParamUtil.stringParam(params.get("model"), this.model);
+        int maxTokensToUse = AsyncClientParamUtil.intParam(params.get("maxTokens"), this.maxTokens);
+        double tempToUse = AsyncClientParamUtil.doubleParam(params.get("temperature"), this.temperature);
 
         body.addProperty("model", modelToUse);
         body.addProperty("max_tokens", maxTokensToUse);
@@ -150,7 +150,7 @@ public class AsyncOpenAIClient implements AsyncLLMClient {
         JsonArray messages = new JsonArray();
 
         // System message (if provided)
-        String systemPrompt = (String) params.get("systemPrompt");
+        String systemPrompt = AsyncClientParamUtil.stringParam(params.get("systemPrompt"), null);
         if (systemPrompt != null && !systemPrompt.isEmpty()) {
             JsonObject systemMessage = new JsonObject();
             systemMessage.addProperty("role", "system");
@@ -192,7 +192,23 @@ public class AsyncOpenAIClient implements AsyncLLMClient {
             }
 
             JsonObject firstChoice = json.getAsJsonArray("choices").get(0).getAsJsonObject();
+            if (!firstChoice.has("message") || !firstChoice.get("message").isJsonObject()) {
+                throw new LLMException(
+                    "OpenAI response missing 'message' object in first choice",
+                    LLMException.ErrorType.INVALID_RESPONSE,
+                    PROVIDER_ID,
+                    false
+                );
+            }
             JsonObject message = firstChoice.getAsJsonObject("message");
+            if (!message.has("content")) {
+                throw new LLMException(
+                    "OpenAI message missing 'content'",
+                    LLMException.ErrorType.INVALID_RESPONSE,
+                    PROVIDER_ID,
+                    false
+                );
+            }
             String content = message.get("content").getAsString();
 
             // Extract token usage

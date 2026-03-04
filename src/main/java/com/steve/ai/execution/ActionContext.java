@@ -44,6 +44,7 @@ public class ActionContext {
     private final EventBus eventBus;
     private final AgentStateMachine stateMachine;
     private final InterceptorChain interceptorChain;
+    private final SafetyEvaluatorManager safetyEvaluatorManager;
 
     /**
      * Constructs an ActionContext with all dependencies.
@@ -57,11 +58,13 @@ public class ActionContext {
             ServiceContainer serviceContainer,
             EventBus eventBus,
             AgentStateMachine stateMachine,
-            InterceptorChain interceptorChain) {
+            InterceptorChain interceptorChain,
+            SafetyEvaluatorManager safetyEvaluatorManager) {
         this.serviceContainer = serviceContainer;
         this.eventBus = eventBus;
         this.stateMachine = stateMachine;
         this.interceptorChain = interceptorChain;
+        this.safetyEvaluatorManager = safetyEvaluatorManager;
     }
 
     /**
@@ -98,6 +101,10 @@ public class ActionContext {
      */
     public InterceptorChain getInterceptorChain() {
         return interceptorChain;
+    }
+
+    public SafetyEvaluatorManager getSafetyEvaluatorManager() {
+        return safetyEvaluatorManager;
     }
 
     /**
@@ -152,6 +159,7 @@ public class ActionContext {
         private EventBus eventBus;
         private AgentStateMachine stateMachine;
         private InterceptorChain interceptorChain;
+        private SafetyEvaluatorManager safetyEvaluatorManager;
 
         public Builder serviceContainer(ServiceContainer serviceContainer) {
             this.serviceContainer = serviceContainer;
@@ -173,8 +181,13 @@ public class ActionContext {
             return this;
         }
 
+        public Builder safetyEvaluatorManager(SafetyEvaluatorManager safetyEvaluatorManager) {
+            this.safetyEvaluatorManager = safetyEvaluatorManager;
+            return this;
+        }
+
         public ActionContext build() {
-            return new ActionContext(serviceContainer, eventBus, stateMachine, interceptorChain);
+            return new ActionContext(serviceContainer, eventBus, stateMachine, interceptorChain, safetyEvaluatorManager);
         }
     }
 

@@ -5,6 +5,7 @@ import com.steve.ai.command.SteveCommands;
 import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
 import com.steve.ai.entity.SteveManager;
+import com.steve.ai.testing.StevePlaytestRunner;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
@@ -56,6 +57,7 @@ public class SteveMod {
         EntityAttributeCreationEvent.getBus(modBusGroup).addListener(this::entityAttributes);
 
         RegisterCommandsEvent.BUS.addListener(this::onCommandRegister);
+        net.minecraftforge.event.TickEvent.ServerTickEvent.Post.BUS.addListener(this::onServerTick);
         
         if (net.minecraftforge.fml.loading.FMLEnvironment.dist.isClient()) {
             net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent.getBus(modBusGroup).addListener(
@@ -70,6 +72,12 @@ public class SteveMod {
             );
             net.minecraftforge.client.event.RegisterKeyMappingsEvent.BUS.addListener(
                 com.steve.ai.client.KeyBindings::registerKeys
+            );
+            net.minecraftforge.client.event.RenderHighlightEvent.Block.BUS.addListener(
+                com.steve.ai.client.SteveDebugTargetRenderer::onRenderHighlightBlock
+            );
+            net.minecraftforge.client.event.RenderLivingEvent.Post.BUS.addListener(
+                com.steve.ai.client.SteveDebugTargetRenderer::onRenderLivingPost
             );
         }
         
@@ -93,5 +101,13 @@ public class SteveMod {
 
     public static SteveManager getSteveManager() {
         return steveManager;
+    }
+
+    private void onServerTick(net.minecraftforge.event.TickEvent.ServerTickEvent.Post event) {
+        net.minecraft.server.MinecraftServer server = net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
+        if (server == null) {
+            return;
+        }
+        StevePlaytestRunner.tick(server);
     }
 }

@@ -21,7 +21,13 @@ public class PromptBuilder {
             ACTIONS:
             - attack: {"target": "hostile"} (for any mob/monster)
             - build: {"structure": "house", "blocks": ["oak_planks", "cobblestone", "glass_pane"], "dimensions": [9, 6, 9]}
+            - craft: {"item": "wooden_pickaxe", "quantity": 1}
+            - smelt: {"item": "iron_ingot", "quantity": 3}
+            - gather: {"resource": "oak_log", "quantity": 3}
             - mine: {"block": "iron", "quantity": 8} (resources: iron, diamond, coal, gold, copper, redstone, emerald, stone, dirt, etc.)
+            - farm: {"crop": "wheat", "quantity": 12}
+            - feed: {"species": "cow", "quantity": 2}
+            - retrieve_chest: {"item": "bread", "quantity": 3}
             - follow: {"player": "NAME"}
             - pathfind: {"x": 0, "y": 0, "z": 0}
             
@@ -31,11 +37,16 @@ public class PromptBuilder {
             3. house/oldhouse/powerplant = pre-built NBT templates (auto-size)
             4. castle/tower/barn/modern = procedural (castle=14x10x14, tower=6x6x16, barn=12x8x14)
             5. Use 2-3 block types: oak_planks, cobblestone, glass_pane, stone_bricks
-            6. NO extra pathfind tasks unless explicitly requested
+            6. Avoid unrelated pathfind tasks; for movement/navigation commands, use pathfind tasks.
             7. Keep reasoning under 15 words
             8. COLLABORATIVE BUILDING: Multiple Steves can work on same structure simultaneously
             9. MINING: Can mine any ore (iron, diamond, coal, etc) or block type
             10. DESTROY/DEMOLISH: To destroy or tear down structures, use "mine" action with appropriate block type (e.g., {"action": "mine", "parameters": {"block": "oak_planks", "quantity": 50}} to tear down a wooden house)
+            11. WATER TRAVEL: Rivers/water are traversable. Do not avoid movement just because water is present.
+            12. LONG ROUTES: For far navigation (about 80+ blocks) or water crossings, you may emit 2-3 staged pathfind tasks (waypoints) ending at final target.
+            13. If player command includes coordinates, preserve them exactly in final pathfind task.
+            14. MINECRAFT LEGALITY: Never propose illegal shortcuts (e.g., tilling dirt without hoe, crafting station-locked recipes without proper station).
+            15. TOOL GOALS (e.g. "make wooden pickaxe"): include final craft task for that exact tool; do not stop at only mining logs.
             
             EXAMPLES (copy these formats exactly):
             
@@ -56,6 +67,9 @@ public class PromptBuilder {
             
             Input: "follow me"
             {"reasoning": "Player needs me", "plan": "Follow player", "tasks": [{"action": "follow", "parameters": {"player": "USE_NEARBY_PLAYER_NAME"}}]}
+
+            Input: "go to 120 64 -40 across the river"
+            {"reasoning": "Navigating across river to target", "plan": "Travel to destination", "tasks": [{"action": "pathfind", "parameters": {"x": 80, "y": 64, "z": -20}}, {"action": "pathfind", "parameters": {"x": 120, "y": 64, "z": -40}}]}
             
             Input: "destroy the house"
             {"reasoning": "Demolishing house structure", "plan": "Mine house blocks", "tasks": [{"action": "mine", "parameters": {"block": "oak_planks", "quantity": 50}}]}

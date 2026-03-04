@@ -39,6 +39,15 @@ public class ClientEventHandler {
             SteveGUI.toggleInventoryOverlay();
         }
 
+        if (KeyBindings.TOGGLE_STEVE_MEMORY != null && KeyBindings.TOGGLE_STEVE_MEMORY.consumeClick()) {
+            SteveGUI.toggleMemoryOverlay();
+        }
+
+        if (KeyBindings.OPEN_STEVE_SETTINGS != null && KeyBindings.OPEN_STEVE_SETTINGS.consumeClick()) {
+            SteveGUI.openSettingsScreen();
+        }
+
         StevePovScreenshot.onClientTick();
+        SteveDebugTargetRenderer.tickParticleMarkers();
     }
 }

@@ -91,8 +91,8 @@ public class SteveAPI {
         }
 
         Map<String, Object> params = new HashMap<>();
-        params.put("blockType", blockType.toLowerCase());
-        params.put("count", count);
+        params.put("block", blockType.toLowerCase());
+        params.put("quantity", count);
 
         actionQueue.add(new Task("mine", params));
     }
@@ -128,7 +128,7 @@ public class SteveAPI {
 
         Map<String, Object> params = new HashMap<>();
         params.put("item", itemName.toLowerCase());
-        params.put("count", count);
+        params.put("quantity", count);
 
         actionQueue.add(new Task("craft", params));
     }
@@ -177,7 +177,7 @@ public class SteveAPI {
         }
 
         Map<String, Object> params = new HashMap<>();
-        params.put("playerName", playerName);
+        params.put("player", playerName);
 
         actionQueue.add(new Task("follow", params));
     }
@@ -198,7 +198,7 @@ public class SteveAPI {
 
         Map<String, Object> params = new HashMap<>();
         params.put("resource", resourceType.toLowerCase());
-        params.put("count", count);
+        params.put("quantity", count);
 
         actionQueue.add(new Task("gather", params));
     }

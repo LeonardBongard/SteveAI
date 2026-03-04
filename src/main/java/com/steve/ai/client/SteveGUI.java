@@ -9,6 +9,7 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.resources.Identifier;
 import net.minecraft.network.chat.Component;
+import net.minecraft.core.BlockPos;
 import net.minecraftforge.client.event.AddGuiOverlayLayersEvent;
 import net.minecraftforge.client.gui.overlay.ForgeLayeredDraw;
 
@@ -53,6 +54,7 @@ public class SteveGUI {
     private static final int INVENTORY_BORDER = 0xFF4A4A4A;
     private static final int INVENTORY_TEXT = 0xFFEDEDED;
     private static boolean showInventoryOverlay = false;
+    private static boolean showMemoryOverlay = false;
 
     private static class ChatMessage {
         String sender; // "You", "Steve", "Alex", "System", etc.
@@ -148,11 +150,11 @@ public class SteveGUI {
     }
 
     private static void renderOverlay(GuiGraphics graphics, DeltaTracker deltaTracker) {
-        if (SteveConfig.ENABLE_DEBUG_OVERLAY.get()) {
-            renderDebugOverlay(graphics);
-        }
         if (showInventoryOverlay) {
             renderInventoryOverlay(graphics);
+        }
+        if (showMemoryOverlay) {
+            renderMemoryOverlay(graphics);
         }
         renderPanel(graphics);
     }
@@ -184,8 +186,11 @@ public class SteveGUI {
             int visibleCount = steve.getVisibleBlocksCount();
             int scanAge = steve.getVisibleScanAge();
             String scanAgeLabel = scanAge < 0 ? "n/a" : scanAge + "t";
+            BlockPos target = steve.getDebugTargetBlock();
+            String targetLabel = target == null ? "-" : (target.getX() + "," + target.getY() + "," + target.getZ());
             lines.add(name + ": " + status);
             lines.add("  visible=" + visibleCount + " scanAge=" + scanAgeLabel);
+            lines.add("  target=" + targetLabel);
             count++;
         }
 
@@ -236,10 +241,11 @@ public class SteveGUI {
         
         graphics.fillGradient(panelX - 2, panelY, panelX, panelHeight, BORDER_COLOR, BORDER_COLOR);
 
-        int headerHeight = 35;
+        int headerHeight = 48;
         graphics.fillGradient(panelX, panelY, screenWidth, headerHeight, HEADER_COLOR, HEADER_COLOR);
         graphics.drawString(mc.font, "§lSteve AI", panelX + PANEL_PADDING, panelY + 8, TEXT_COLOR);
         graphics.drawString(mc.font, "§7Press Esc to close", panelX + PANEL_PADDING, panelY + 20, 0xFF888888);
+        renderPanelDebugStatus(graphics, panelX + PANEL_PADDING, panelY + 32);
 
         // Message history area
         int inputAreaY = screenHeight - 80;
@@ -463,6 +469,11 @@ public class SteveGUI {
         addUserMessage(command);
 
         String commandLower = command.trim().toLowerCase();
+        if (commandLower.equals("settings") || commandLower.equals("/settings")) {
+            openSettingsScreen();
+            addSystemMessage("Opened Steve settings.");
+            return;
+        }
         if (commandLower.equals("screenshot") || commandLower.equals("pov screenshot") || commandLower.equals("pov") ||
             commandLower.equals("cheat screenshot") || commandLower.equals("cheat pov") ||
             commandLower.equals("cheat pov screenshot")) {
@@ -562,6 +573,19 @@ public class SteveGUI {
         SteveMod.LOGGER.info("SteveGUI inventory overlay -> {}", showInventoryOverlay ? "ON" : "OFF");
     }
 
+    public static void toggleMemoryOverlay() {
+        showMemoryOverlay = !showMemoryOverlay;
+        SteveMod.LOGGER.info("SteveGUI memory overlay -> {}", showMemoryOverlay ? "ON" : "OFF");
+    }
+
+    public static void openSettingsScreen() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) {
+            return;
+        }
+        mc.setScreen(new SteveSettingsScreen(mc.screen));
+    }
+
     private static void renderInventoryOverlay(GuiGraphics graphics) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null) return;
@@ -601,6 +625,58 @@ public class SteveGUI {
         }
     }
 
+    private static void renderMemoryOverlay(GuiGraphics graphics) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) return;
+
+        List<SteveEntity> steves = mc.level.getEntitiesOfClass(
+            SteveEntity.class,
+            mc.player.getBoundingBox().inflate(96)
+        );
+        if (steves.isEmpty()) {
+            return;
+        }
+
+        SteveEntity steve = steves.get(0);
+        int width = 320;
+        int height = 128;
+        int x = 6;
+        int y = 106;
+
+        graphics.fill(x, y, x + width, y + height, INVENTORY_BG);
+        graphics.fill(x, y, x + width, y + 1, INVENTORY_BORDER);
+        graphics.fill(x, y, x + 1, y + height, INVENTORY_BORDER);
+        graphics.fill(x + width - 1, y, x + width, y + height, INVENTORY_BORDER);
+        graphics.fill(x, y + height - 1, x + width, y + height, INVENTORY_BORDER);
+        graphics.drawString(mc.font, "Steve Memory", x + 6, y + 6, INVENTORY_TEXT);
+
+        String blockSummary = steve.getMemoryBlocksSummarySynced();
+        if (blockSummary == null || blockSummary.isBlank()) {
+            blockSummary = "No block memory";
+        }
+        String chestSummary = steve.getMemoryChestsSummarySynced();
+        if (chestSummary == null || chestSummary.isBlank()) {
+            chestSummary = "No chest memory";
+        }
+        String semanticSummary = steve.getMemorySemanticSummarySynced();
+        if (semanticSummary == null || semanticSummary.isBlank()) {
+            semanticSummary = "No semantic memory";
+        }
+
+        graphics.drawString(mc.font, "Blocks:", x + 6, y + 20, INVENTORY_TEXT);
+        List<String> blockLines = wrapTextLines(mc.font, blockSummary, width - 12);
+        int lineY = y + 32;
+        for (String line : blockLines) {
+            if (lineY > y + 66) break;
+            graphics.drawString(mc.font, line, x + 6, lineY, INVENTORY_TEXT);
+            lineY += mc.font.lineHeight + 1;
+        }
+
+        graphics.drawString(mc.font, "Chests: " + chestSummary, x + 6, y + 76, INVENTORY_TEXT);
+        graphics.drawString(mc.font, "Semantic: " + semanticSummary, x + 6, y + 90, INVENTORY_TEXT);
+        graphics.drawString(mc.font, "Legend: yellow=working green=episodic orange=chests", x + 6, y + 106, INVENTORY_TEXT);
+    }
+
     private static List<String> wrapTextLines(net.minecraft.client.gui.Font font, String text, int maxWidth) {
         List<String> lines = new ArrayList<>();
         String[] parts = text.split(", ");
@@ -625,5 +701,28 @@ public class SteveGUI {
             lines.add(text);
         }
         return lines;
+    }
+
+    private static void renderPanelDebugStatus(GuiGraphics graphics, int x, int y) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) {
+            return;
+        }
+        List<SteveEntity> steves = mc.level.getEntitiesOfClass(
+            SteveEntity.class,
+            mc.player.getBoundingBox().inflate(96)
+        );
+        if (steves.isEmpty()) {
+            return;
+        }
+        SteveEntity steve = steves.get(0);
+        String status = steve.getDebugStatus();
+        if (status == null || status.isBlank()) {
+            status = "Idle";
+        }
+        BlockPos target = steve.getDebugTargetBlock();
+        String targetLabel = target == null ? "-" : (target.getX() + "," + target.getY() + "," + target.getZ());
+        String line = "§8" + steve.getSteveName() + " | " + status + " | vis=" + steve.getVisibleBlocksCount() + " | target=" + targetLabel;
+        graphics.drawString(mc.font, wrapText(mc.font, line, PANEL_WIDTH - 12), x, y, 0xFF9A9A9A);
     }
 }

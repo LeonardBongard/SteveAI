@@ -17,9 +17,13 @@ import org.slf4j.LoggerFactory;
  *   <li><b>mine</b>: Mine blocks (block type, quantity)</li>
  *   <li><b>place</b>: Place blocks at coordinates</li>
  *   <li><b>craft</b>: Craft items (item, quantity)</li>
+ *   <li><b>smelt</b>: Smelt items in furnace-family stations (item, quantity)</li>
  *   <li><b>attack</b>: Attack entities (target)</li>
+ *   <li><b>feed</b>: Feed animals (species, quantity)</li>
  *   <li><b>follow</b>: Follow a player</li>
  *   <li><b>gather</b>: Gather resources (resource, quantity)</li>
+ *   <li><b>farm</b>: Farm crops (crop, quantity)</li>
+ *   <li><b>retrieve_chest</b>: Retrieve known chest items (item, quantity)</li>
  *   <li><b>build</b>: Build structures (structure type, blocks, dimensions)</li>
  * </ul>
  *
@@ -73,14 +77,31 @@ public class CoreActionsPlugin implements ActionPlugin {
             (steve, task, ctx) -> new CraftItemAction(steve, task),
             priority, PLUGIN_ID);
 
+        registry.register("smelt",
+            (steve, task, ctx) -> new SmeltItemAction(steve, task),
+            priority, PLUGIN_ID);
+
         // Combat
         registry.register("attack",
             (steve, task, ctx) -> new CombatAction(steve, task),
             priority, PLUGIN_ID);
 
+        registry.register("feed",
+            (steve, task, ctx) -> new FeedAnimalAction(steve, task),
+            priority, PLUGIN_ID);
+
         // Player interaction
         registry.register("follow",
             (steve, task, ctx) -> new FollowPlayerAction(steve, task),
+            priority, PLUGIN_ID);
+
+        // Farming/sourcing
+        registry.register("farm",
+            (steve, task, ctx) -> new FarmCropAction(steve, task),
+            priority, PLUGIN_ID);
+
+        registry.register("retrieve_chest",
+            (steve, task, ctx) -> new RetrieveFromChestAction(steve, task),
             priority, PLUGIN_ID);
 
         LOGGER.info("CoreActionsPlugin loaded {} actions", registry.getActionCount());

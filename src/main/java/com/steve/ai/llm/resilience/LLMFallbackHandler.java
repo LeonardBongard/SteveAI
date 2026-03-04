@@ -4,8 +4,9 @@ import com.steve.ai.llm.async.LLMResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Map;
+import java.util.List;
 import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 
 /**
  * Fallback handler that generates pattern-based responses when LLM calls fail.
@@ -44,41 +45,52 @@ import java.util.regex.Pattern;
 public class LLMFallbackHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(LLMFallbackHandler.class);
+    private static final Pattern COORDINATE_TRIPLET =
+        Pattern.compile("(-?\\d+)\\s*(?:,|\\s)\\s*(-?\\d+)\\s*(?:,|\\s)\\s*(-?\\d+)");
+    private static final Pattern MOVEMENT_INTENT =
+        Pattern.compile("(?i).*(go to|move to|walk to|travel|path|navigate|cross|swim).*");
+    private static final Pattern WATER_INTENT =
+        Pattern.compile("(?i).*(river|water|swim|ocean|lake|across).*");
 
-    // Pattern-based fallback responses in JSON format matching ResponseParser expectations
-    private static final Map<Pattern, String> PATTERN_RESPONSES = Map.of(
-        // Mining patterns
-        Pattern.compile("(?i).*(mine|dig|collect|gather|ore|diamond|iron|coal|stone).*"),
-        "{\"thoughts\":\"[Fallback] Mining action detected\",\"tasks\":[{\"action\":\"mine\",\"target\":\"iron_ore\",\"quantity\":10}]}",
-
-        // Building patterns
-        Pattern.compile("(?i).*(build|construct|create|make).*(house|home|shelter|structure|base).*"),
-        "{\"thoughts\":\"[Fallback] Building action detected\",\"tasks\":[{\"action\":\"build\",\"structure\":\"house\",\"size\":\"small\"}]}",
-
-        // Combat patterns
-        Pattern.compile("(?i).*(attack|fight|kill|destroy|hostile|monster|zombie|skeleton|creeper).*"),
-        "{\"thoughts\":\"[Fallback] Combat action detected\",\"tasks\":[{\"action\":\"attack\",\"target\":\"nearest_hostile\"}]}",
-
-        // Follow patterns
-        Pattern.compile("(?i).*(follow|come|here|with me|accompany).*"),
-        "{\"thoughts\":\"[Fallback] Follow action detected\",\"tasks\":[{\"action\":\"follow\",\"target\":\"player\"}]}",
-
-        // Movement patterns
-        Pattern.compile("(?i).*(go to|move to|walk to|travel|path|navigate).*"),
-        "{\"thoughts\":\"[Fallback] Movement action detected\",\"tasks\":[{\"action\":\"pathfind\",\"target\":\"player\"}]}",
-
-        // Placement patterns
-        Pattern.compile("(?i).*(place|put|set).*(block|torch|door).*"),
-        "{\"thoughts\":\"[Fallback] Placement action detected\",\"tasks\":[{\"action\":\"place_block\",\"block\":\"torch\",\"position\":\"here\"}]}",
-
-        // Stop patterns
-        Pattern.compile("(?i).*(stop|halt|cancel|wait|pause|stay).*"),
-        "{\"thoughts\":\"[Fallback] Stop action detected\",\"tasks\":[{\"action\":\"wait\",\"duration\":5}]}"
+    private static final List<PatternRule> PATTERN_RESPONSES = List.of(
+        // Feeding/farming first so they are not swallowed by generic gather/mine.
+        new PatternRule(
+            Pattern.compile("(?i).*(feed|breed|animals?|cows?|pigs?|chickens?|sheep|goats?|rabbits?).*"),
+            "{\"reasoning\":\"fallback feed intent\",\"plan\":\"feed animals\",\"tasks\":[{\"action\":\"feed\",\"parameters\":{\"species\":\"cow\",\"quantity\":2}}]}"
+        ),
+        new PatternRule(
+            Pattern.compile("(?i).*(farm|plant|harvest|crop|wheat|carrot|potato).*"),
+            "{\"reasoning\":\"fallback farm intent\",\"plan\":\"farm crops\",\"tasks\":[{\"action\":\"farm\",\"parameters\":{\"crop\":\"wheat\",\"quantity\":12}}]}"
+        ),
+        new PatternRule(
+            Pattern.compile("(?i).*(mine|dig|collect|gather|ore|diamond|iron|coal|stone).*"),
+            "{\"reasoning\":\"fallback mining intent\",\"plan\":\"mine resources\",\"tasks\":[{\"action\":\"mine\",\"parameters\":{\"block\":\"iron\",\"quantity\":10}}]}"
+        ),
+        new PatternRule(
+            Pattern.compile("(?i).*(build|construct|create|make).*(house|home|shelter|structure|base).*"),
+            "{\"reasoning\":\"fallback build intent\",\"plan\":\"build house\",\"tasks\":[{\"action\":\"build\",\"parameters\":{\"structure\":\"house\",\"blocks\":[\"oak_planks\",\"cobblestone\",\"glass_pane\"],\"dimensions\":[9,6,9]}}]}"
+        ),
+        new PatternRule(
+            Pattern.compile("(?i).*(attack|fight|kill|destroy|hostile|monster|zombie|skeleton|creeper).*"),
+            "{\"reasoning\":\"fallback combat intent\",\"plan\":\"attack hostiles\",\"tasks\":[{\"action\":\"attack\",\"parameters\":{\"target\":\"hostile\"}}]}"
+        ),
+        new PatternRule(
+            Pattern.compile("(?i).*(follow|come|here|with me|accompany).*"),
+            "{\"reasoning\":\"fallback follow intent\",\"plan\":\"follow player\",\"tasks\":[{\"action\":\"follow\",\"parameters\":{\"player\":\"USE_NEARBY_PLAYER_NAME\"}}]}"
+        ),
+        new PatternRule(
+            Pattern.compile("(?i).*(go to|move to|walk to|travel|path|navigate).*"),
+            "{\"reasoning\":\"fallback movement intent\",\"plan\":\"move near current position\",\"tasks\":[{\"action\":\"pathfind\",\"parameters\":{\"x\":0,\"y\":64,\"z\":0}}]}"
+        ),
+        new PatternRule(
+            Pattern.compile("(?i).*(stop|halt|cancel|wait|pause|stay).*"),
+            "{\"reasoning\":\"fallback stop intent\",\"plan\":\"hold position\",\"tasks\":[{\"action\":\"follow\",\"parameters\":{\"player\":\"USE_NEARBY_PLAYER_NAME\"}}]}"
+        )
     );
 
     // Default response when no pattern matches
     private static final String DEFAULT_RESPONSE =
-        "{\"thoughts\":\"[Fallback] No pattern matched, waiting\",\"tasks\":[{\"action\":\"wait\",\"duration\":5}]}";
+        "{\"reasoning\":\"fallback default\",\"plan\":\"follow player\",\"tasks\":[{\"action\":\"follow\",\"parameters\":{\"player\":\"USE_NEARBY_PLAYER_NAME\"}}]}";
 
     /**
      * Generates a fallback response based on pattern matching.
@@ -95,6 +107,19 @@ public class LLMFallbackHandler {
         LOGGER.warn("Generating fallback response for prompt: '{}' (error: {})",
             truncatePrompt(prompt, 50),
             error != null ? error.getClass().getSimpleName() + ": " + error.getMessage() : "unknown");
+
+        String coordinateMovement = buildCoordinateMovementFallback(prompt);
+        if (coordinateMovement != null) {
+            LOGGER.info("Fallback response generated (matched: coordinate-movement)");
+            return LLMResponse.builder()
+                .content(coordinateMovement)
+                .model("fallback-pattern-matcher")
+                .providerId("fallback")
+                .latencyMs(0)
+                .tokensUsed(0)
+                .fromCache(false)
+                .build();
+        }
 
         // Try to match against known patterns
         String responseContent = matchPattern(prompt);
@@ -125,10 +150,10 @@ public class LLMFallbackHandler {
 
         String lowerPrompt = prompt.toLowerCase();
 
-        for (Map.Entry<Pattern, String> entry : PATTERN_RESPONSES.entrySet()) {
-            if (entry.getKey().matcher(lowerPrompt).matches()) {
-                LOGGER.debug("Matched pattern: {}", entry.getKey().pattern());
-                return entry.getValue();
+        for (PatternRule rule : PATTERN_RESPONSES) {
+            if (rule.pattern.matcher(lowerPrompt).matches()) {
+                LOGGER.debug("Matched pattern: {}", rule.pattern.pattern());
+                return rule.responseJson;
             }
         }
 
@@ -167,8 +192,8 @@ public class LLMFallbackHandler {
         }
 
         String lowerPrompt = prompt.toLowerCase();
-        return PATTERN_RESPONSES.keySet().stream()
-            .anyMatch(pattern -> pattern.matcher(lowerPrompt).matches());
+        return PATTERN_RESPONSES.stream()
+            .anyMatch(rule -> rule.pattern.matcher(lowerPrompt).matches());
     }
 
     /**
@@ -178,5 +203,46 @@ public class LLMFallbackHandler {
      */
     public int getPatternCount() {
         return PATTERN_RESPONSES.size();
+    }
+
+    private String buildCoordinateMovementFallback(String prompt) {
+        if (prompt == null || prompt.isBlank()) {
+            return null;
+        }
+        String lower = prompt.toLowerCase();
+        if (!MOVEMENT_INTENT.matcher(lower).matches() && !WATER_INTENT.matcher(lower).matches()) {
+            return null;
+        }
+        Matcher matcher = COORDINATE_TRIPLET.matcher(lower);
+        if (!matcher.find()) {
+            return null;
+        }
+        int x = parseInt(matcher.group(1), 0);
+        int y = parseInt(matcher.group(2), 64);
+        int z = parseInt(matcher.group(3), 0);
+
+        String reasoning = WATER_INTENT.matcher(lower).matches()
+            ? "fallback water traversal intent"
+            : "fallback movement intent";
+        String plan = WATER_INTENT.matcher(lower).matches()
+            ? "travel across water to coordinates"
+            : "move to coordinates";
+        return "{\"reasoning\":\"" + reasoning + "\",\"plan\":\"" + plan
+            + "\",\"tasks\":[{\"action\":\"pathfind\",\"parameters\":{\"x\":" + x
+            + ",\"y\":" + y + ",\"z\":" + z + "}}]}";
+    }
+
+    private int parseInt(String raw, int defaultValue) {
+        if (raw == null || raw.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
+    }
+
+    private record PatternRule(Pattern pattern, String responseJson) {
     }
 }

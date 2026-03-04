@@ -12,8 +12,19 @@ public class SteveConfig {
     public static final ForgeConfigSpec.IntValue ACTION_TICK_DELAY;
     public static final ForgeConfigSpec.BooleanValue ENABLE_CHAT_RESPONSES;
     public static final ForgeConfigSpec.IntValue MAX_ACTIVE_STEVES;
+    public static final ForgeConfigSpec.IntValue CHEST_SOURCE_RADIUS;
+    public static final ForgeConfigSpec.IntValue CHEST_SOURCE_STALE_TICKS;
+    public static final ForgeConfigSpec.IntValue CHEST_SOURCE_VERY_STALE_TICKS;
+    public static final ForgeConfigSpec.IntValue CHEST_SOURCE_MAX_DISTANCE_CRITICAL;
+    public static final ForgeConfigSpec.IntValue CHEST_SOURCE_MAX_DISTANCE_HIGH;
+    public static final ForgeConfigSpec.DoubleValue CHEST_SOURCE_MIN_SCORE_NORMAL;
+    public static final ForgeConfigSpec.DoubleValue CHEST_SOURCE_MIN_SCORE_CRITICAL;
     public static final ForgeConfigSpec.BooleanValue ENABLE_DEBUG_OVERLAY;
     public static final ForgeConfigSpec.BooleanValue ENABLE_VIEW_COVERAGE_OVERLAY;
+    public static final ForgeConfigSpec.BooleanValue AUTO_RUN_IRON_PICKAXE_PLAYTEST_ON_WORLD_LOAD;
+    public static final ForgeConfigSpec.BooleanValue AUTO_PLAYTEST_AUTO_SPAWN_STEVE;
+    public static final ForgeConfigSpec.ConfigValue<String> AUTO_PLAYTEST_STEVE_NAME;
+    public static final ForgeConfigSpec.IntValue AUTO_PLAYTEST_TIMEOUT_SECONDS;
     
     // Ollama configuration
     public static final ForgeConfigSpec.ConfigValue<String> OLLAMA_BASE_URL;
@@ -88,6 +99,50 @@ public class SteveConfig {
         MAX_ACTIVE_STEVES = builder
             .comment("Maximum number of Steves that can be active simultaneously")
             .defineInRange("maxActiveSteves", 10, 1, 50);
+
+        CHEST_SOURCE_RADIUS = builder
+            .comment("Max distance (blocks) for chest-memory sourcing and retrieval")
+            .defineInRange("chestSourceRadius", 50, 1, 256);
+
+        CHEST_SOURCE_STALE_TICKS = builder
+            .comment("Chest memory age (ticks) after which sourcing gets penalized (20 ticks = 1 second)")
+            .defineInRange("chestSourceStaleTicks", 12000, 200, 2_000_000);
+
+        CHEST_SOURCE_VERY_STALE_TICKS = builder
+            .comment("Chest memory age (ticks) considered very stale and often rejected")
+            .defineInRange("chestSourceVeryStaleTicks", 36000, 400, 4_000_000);
+
+        CHEST_SOURCE_MAX_DISTANCE_CRITICAL = builder
+            .comment("Max chest travel distance in CRITICAL urgency")
+            .defineInRange("chestSourceMaxDistanceCritical", 16, 1, 256);
+
+        CHEST_SOURCE_MAX_DISTANCE_HIGH = builder
+            .comment("Max chest travel distance in HIGH urgency")
+            .defineInRange("chestSourceMaxDistanceHigh", 24, 1, 256);
+
+        CHEST_SOURCE_MIN_SCORE_NORMAL = builder
+            .comment("Minimum source score to accept chest candidate in NORMAL urgency")
+            .defineInRange("chestSourceMinScoreNormal", 0.0, -20.0, 20.0);
+
+        CHEST_SOURCE_MIN_SCORE_CRITICAL = builder
+            .comment("Minimum source score to accept chest candidate in CRITICAL urgency")
+            .defineInRange("chestSourceMinScoreCritical", 0.75, -20.0, 20.0);
+
+        AUTO_RUN_IRON_PICKAXE_PLAYTEST_ON_WORLD_LOAD = builder
+            .comment("If true, auto-start iron pickaxe playtest when world loads and a player is present")
+            .define("autoRunIronPickaxePlaytestOnWorldLoad", true);
+
+        AUTO_PLAYTEST_AUTO_SPAWN_STEVE = builder
+            .comment("If true and target Steve is missing, auto-spawn target Steve before auto playtest")
+            .define("autoPlaytestAutoSpawnSteve", true);
+
+        AUTO_PLAYTEST_STEVE_NAME = builder
+            .comment("Steve name used for world-load auto playtest")
+            .define("autoPlaytestSteveName", "Steve");
+
+        AUTO_PLAYTEST_TIMEOUT_SECONDS = builder
+            .comment("Timeout seconds for world-load auto playtest")
+            .defineInRange("autoPlaytestTimeoutSeconds", 420, 30, 1800);
         
         builder.pop();
 

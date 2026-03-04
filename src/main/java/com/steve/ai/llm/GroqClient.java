@@ -69,8 +69,21 @@ public class GroqClient {
 
             if (response.statusCode() == 200) {
                 JsonObject jsonResponse = JsonParser.parseString(response.body()).getAsJsonObject();
-                return jsonResponse.getAsJsonArray("choices").get(0).getAsJsonObject()
-                    .getAsJsonObject("message").get("content").getAsString();
+                if (!jsonResponse.has("choices") || jsonResponse.getAsJsonArray("choices").isEmpty()) {
+                    SteveMod.LOGGER.error("Groq API response missing choices: {}", response.body());
+                    return null;
+                }
+                JsonObject firstChoice = jsonResponse.getAsJsonArray("choices").get(0).getAsJsonObject();
+                if (!firstChoice.has("message") || !firstChoice.get("message").isJsonObject()) {
+                    SteveMod.LOGGER.error("Groq API response missing message object: {}", response.body());
+                    return null;
+                }
+                JsonObject message = firstChoice.getAsJsonObject("message");
+                if (!message.has("content")) {
+                    SteveMod.LOGGER.error("Groq API response missing content field: {}", response.body());
+                    return null;
+                }
+                return message.get("content").getAsString();
             } else {
                 SteveMod.LOGGER.error("Groq API request failed: {} ", response.statusCode());
                 SteveMod.LOGGER.error("Response body: {}", response.body());
@@ -82,4 +95,3 @@ public class GroqClient {
         }
     }
 }
-

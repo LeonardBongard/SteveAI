@@ -44,6 +44,7 @@ public class CombatAction extends BaseAction {
     @Override
     protected void onTick() {
         ticksRunning++;
+        steve.addExhaustion(0.03F);
         
         if (ticksRunning > MAX_TICKS) {
             // Combat complete - clean up and disable invulnerability
@@ -99,6 +100,7 @@ public class CombatAction extends BaseAction {
         lastZ = currentZ;
         
         if (distance <= ATTACK_RANGE) {
+            steve.addExhaustion(0.1F);
             if (steve.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
                 steve.doHurtTarget(serverLevel, target);
             }

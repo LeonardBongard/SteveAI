@@ -20,6 +20,9 @@ public class FollowPlayerAction extends BaseAction {
     @Override
     protected void onStart() {
         playerName = task.getStringParameter("player");
+        if (playerName == null || playerName.isBlank()) {
+            playerName = task.getStringParameter("playerName");
+        }
         ticksRunning = 0;
         
         findPlayer();
@@ -97,4 +100,3 @@ public class FollowPlayerAction extends BaseAction {
         }
     }
 }
-

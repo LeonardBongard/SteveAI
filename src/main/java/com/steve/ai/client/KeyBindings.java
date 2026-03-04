@@ -14,6 +14,8 @@ public class KeyBindings {
     public static KeyMapping TOGGLE_GUI;
     public static KeyMapping TOGGLE_STEVE_POV;
     public static KeyMapping TOGGLE_STEVE_INVENTORY;
+    public static KeyMapping TOGGLE_STEVE_MEMORY;
+    public static KeyMapping OPEN_STEVE_SETTINGS;
 
     public static void registerKeys(RegisterKeyMappingsEvent event) {
         TOGGLE_GUI = new KeyMapping(
@@ -42,5 +44,23 @@ public class KeyBindings {
         );
 
         event.register(TOGGLE_STEVE_INVENTORY);
+
+        TOGGLE_STEVE_MEMORY = new KeyMapping(
+            "key.steve.toggle_memory",
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_M, // M key
+            KEY_CATEGORY
+        );
+
+        event.register(TOGGLE_STEVE_MEMORY);
+
+        OPEN_STEVE_SETTINGS = new KeyMapping(
+            "key.steve.open_settings",
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_O, // O key
+            KEY_CATEGORY
+        );
+
+        event.register(OPEN_STEVE_SETTINGS);
     }
 }
