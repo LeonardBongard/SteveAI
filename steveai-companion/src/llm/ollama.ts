@@ -42,8 +42,10 @@ export async function chat(messages: Message[]): Promise<ChatResult> {
     stream: false,
     keep_alive: KEEP_ALIVE,
     options: {
-      // gpt-oss is reasoning-tuned; a low-ish temp keeps tool calls stable.
-      temperature: 0.4,
+      // Low temp for tool-call discipline. Higher temps push gpt-oss into
+      // prose chain-of-thought that Ollama mis-parses as text+JSON tool
+      // calls (we hit this in eval scenario 06).
+      temperature: 0.2,
     },
   });
 

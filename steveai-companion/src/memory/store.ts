@@ -20,7 +20,7 @@ import { logs } from '../log.js';
 
 const DEFAULT_PATH = path.resolve(process.cwd(), 'data', 'memory.db');
 export const EMBED_DIM = 768; // nomic-embed-text
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 let db: DB | null = null;
 
@@ -93,6 +93,21 @@ function initSchema(handle: DB): void {
       description TEXT NOT NULL,
       steps TEXT NOT NULL,
       success_count INTEGER NOT NULL DEFAULT 1,
+      embedding BLOB
+    );
+
+    -- v2 skill library: stores executable JS code that the LLM has written
+    -- and verified works. Replaces the v1 playbook (which only stored NL
+    -- step descriptions). See docs/COMPANION_V2_DIRECTION.md §3.3.
+    CREATE TABLE IF NOT EXISTS skills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL,
+      code TEXT NOT NULL,
+      success_count INTEGER NOT NULL DEFAULT 0,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      last_invoked_at TEXT,
       embedding BLOB
     );
   `);

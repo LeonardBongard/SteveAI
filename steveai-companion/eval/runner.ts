@@ -29,6 +29,8 @@ import { openMemoryStore, closeMemoryStore } from '../src/memory/store.js';
 import { conversation } from '../src/memory/conversation.js';
 import { episodic } from '../src/memory/episodic.js';
 import { playbook } from '../src/memory/playbook.js';
+import { skills } from '../src/skills/library.js';
+import { loadKnowledge } from '../src/knowledge/index.js';
 
 import { MockBot, asBot } from './mock-bot.js';
 import type {
@@ -60,6 +62,9 @@ export async function runScenarios(scenarios: Scenario[]): Promise<SummaryReport
     logs.eval.error({ details: health.details }, 'Ollama health check failed');
     throw new Error(health.details);
   }
+
+  // Load Minecraft-knowledge RAG once for the runner. Same version the bot would use.
+  loadKnowledge('1.21.11');
 
   for (const scenario of scenarios) {
     logs.eval.info({ scenario: scenario.name }, 'starting');
@@ -263,6 +268,30 @@ function evaluateGoal(
         : { goal, pass: false, reason: 'no recipes captured' };
     }
 
+    case 'skill_saved': {
+      const list = skills.list(50);
+      const needle = goal.nameContains?.toLowerCase();
+      const filtered = needle ? list.filter((s) => s.name.includes(needle)) : list;
+      return filtered.length > 0
+        ? {
+            goal,
+            pass: true,
+            reason: `${filtered.length} skill(s) saved (e.g. ${filtered[0]?.name ?? '?'})`,
+          }
+        : { goal, pass: false, reason: `no skills saved${needle ? ` matching "${needle}"` : ''}` };
+    }
+
+    case 'skill_code_contains': {
+      const list = skills.list(50);
+      const nameNeedle = goal.skillNameContains?.toLowerCase();
+      const candidates = nameNeedle ? list.filter((s) => s.name.includes(nameNeedle)) : list;
+      const target = goal.text.toLowerCase();
+      const hit = candidates.find((s) => s.code.toLowerCase().includes(target));
+      return hit
+        ? { goal, pass: true, reason: `skill "${hit.name}" code contains "${goal.text}"` }
+        : { goal, pass: false, reason: `no skill code contains "${goal.text}"` };
+    }
+
     case 'world_block': {
       const block = mock.blockAt({ x: goal.x, y: goal.y, z: goal.z } as never);
       const got = block?.name ?? 'air';
@@ -343,6 +372,10 @@ function describeGoal(g: GoalCheck): string {
       return `episodic event ${g.eventTag}`;
     case 'playbook_captured':
       return 'any playbook recipe captured';
+    case 'skill_saved':
+      return `skill saved${g.nameContains ? ` (name~"${g.nameContains}")` : ''}`;
+    case 'skill_code_contains':
+      return `skill${g.skillNameContains ? ` "${g.skillNameContains}"` : ''} code contains "${g.text}"`;
     case 'world_block':
       return `block at (${g.x},${g.y},${g.z}) == ${g.expected}`;
     case 'inventory_has':

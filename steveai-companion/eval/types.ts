@@ -68,7 +68,18 @@ export type GoalCheck =
     }
   | {
       type: 'playbook_captured';
-      // any recipe captured during the run
+      // any recipe captured during the run (v1 — playbook table)
+    }
+  | {
+      type: 'skill_saved';
+      // any v2 skill saved during the run
+      nameContains?: string;
+    }
+  | {
+      type: 'skill_code_contains';
+      /** Either the skill's name (or a substring match) and a string the skill's code must contain. */
+      skillNameContains?: string;
+      text: string;
     }
   | {
       type: 'world_block';

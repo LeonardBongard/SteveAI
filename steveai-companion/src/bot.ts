@@ -19,6 +19,7 @@ const { pathfinder, Movements } = pathfinderPkg;
 import { logs } from './log.js';
 import { healthCheck, config as llmConfig } from './llm/ollama.js';
 import { openMemoryStore, closeMemoryStore } from './memory/store.js';
+import { loadKnowledge } from './knowledge/index.js';
 import { handlePlayerChat } from './planner.js';
 
 // --- Config ---
@@ -35,7 +36,7 @@ const MC_AUTH = (process.env.MC_AUTH ?? 'offline') as 'offline' | 'microsoft' | 
 // --- Bot lifecycle ---
 
 async function main(): Promise<void> {
-  logs.bot.info({ llm: llmConfig }, 'starting steveai-companion v0.2.0 (phase 2)');
+  logs.bot.info({ llm: llmConfig }, 'starting steveai-companion v0.3.0 (v2: code-gen skills + RAG)');
 
   const health = await healthCheck();
   if (!health.ok) {
@@ -45,6 +46,12 @@ async function main(): Promise<void> {
   logs.bot.info(health.details);
 
   openMemoryStore();
+
+  // Load Minecraft-knowledge RAG (recipes, mobs, blocks) for the version
+  // we'll connect to. Auto-detected versions fall back to the most-recent
+  // supported. See docs/COMPANION_V2_DIRECTION.md §3.4.
+  const kbVersion = MC_VERSION ?? '1.21.11';
+  loadKnowledge(kbVersion);
 
   const bot = mineflayer.createBot({
     host: MC_HOST,
