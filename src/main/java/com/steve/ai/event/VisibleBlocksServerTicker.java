@@ -14,22 +14,15 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.event.TickEvent;
-import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.server.ServerLifecycleHooks;
 
 import java.util.ArrayList;
 import java.util.List;
 
-@Mod.EventBusSubscriber(modid = SteveMod.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class VisibleBlocksServerTicker {
     private static int tickCounter = 0;
 
-    @SubscribeEvent
-    public static void onServerTick(TickEvent.ServerTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) {
-            return;
-        }
-
+    public static void onServerTick(TickEvent.ServerTickEvent.Post event) {
         int interval = SteveConfig.DEBUG_VISIBLE_BLOCK_TICK_INTERVAL.get();
         if (interval <= 0) {
             return;
@@ -40,7 +33,7 @@ public class VisibleBlocksServerTicker {
             return;
         }
 
-        MinecraftServer server = event.getServer();
+        MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
         if (server == null) {
             return;
         }
@@ -84,8 +77,8 @@ public class VisibleBlocksServerTicker {
 
         int minX = center.getX() - radius;
         int maxX = center.getX() + radius;
-        int minY = Math.max(level.getMinBuildHeight(), center.getY() - radius);
-        int maxY = Math.min(level.getMaxBuildHeight(), center.getY() + radius);
+        int minY = Math.max(level.getMinY(), center.getY() - radius);
+        int maxY = Math.min(level.getMaxY(), center.getY() + radius);
         int minZ = center.getZ() - radius;
         int maxZ = center.getZ() + radius;
 

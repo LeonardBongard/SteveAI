@@ -5,6 +5,8 @@ import com.steve.ai.command.SteveCommands;
 import com.steve.ai.config.SteveConfig;
 import com.steve.ai.entity.SteveEntity;
 import com.steve.ai.entity.SteveManager;
+import com.steve.ai.event.ServerEventHandler;
+import com.steve.ai.event.VisibleBlocksServerTicker;
 import com.steve.ai.testing.StevePlaytestRunner;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
@@ -58,6 +60,9 @@ public class SteveMod {
 
         RegisterCommandsEvent.BUS.addListener(this::onCommandRegister);
         net.minecraftforge.event.TickEvent.ServerTickEvent.Post.BUS.addListener(this::onServerTick);
+        net.minecraftforge.event.TickEvent.ServerTickEvent.Post.BUS.addListener(VisibleBlocksServerTicker::onServerTick);
+        net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent.BUS.addListener(ServerEventHandler::onPlayerLoggedIn);
+        net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedOutEvent.BUS.addListener(ServerEventHandler::onPlayerLoggedOut);
         
         if (net.minecraftforge.fml.loading.FMLEnvironment.dist.isClient()) {
             net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent.getBus(modBusGroup).addListener(

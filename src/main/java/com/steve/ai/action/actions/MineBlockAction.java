@@ -3,7 +3,13 @@ package com.steve.ai.action.actions;
 import com.steve.ai.SteveMod;
 import com.steve.ai.action.ActionResult;
 import com.steve.ai.action.Task;
+import com.steve.ai.config.StevePersona;
+import com.steve.ai.config.StevePersonaProfiles;
 import com.steve.ai.entity.SteveEntity;
+import com.steve.ai.action.search.RegionBudgetManager;
+import com.steve.ai.action.search.SearchController;
+import com.steve.ai.action.search.LocalReevaluationPolicy;
+import com.steve.ai.action.search.StuckReason;
 import com.steve.ai.mining.BlockTransitionMap;
 import com.steve.ai.mining.ToolCapabilityMap;
 import com.steve.ai.mining.ToolCapabilityMap.ToolRequirement;
@@ -53,10 +59,30 @@ public class MineBlockAction extends BaseAction {
     private static final int EXPLORE_MAX_RADIUS = 72;
     private static final int EXPLORE_RADIUS_STEP = 8;
     private static final int DIRECTED_EXPLORE_SCAN_RADIUS = 24;
+    private static final int CAVE_CUE_SCAN_RADIUS = 20;
+    private static final int CAVE_RAYCAST_MIN_DISTANCE = 8;
+    private static final int CAVE_RAYCAST_MAX_DISTANCE = 64;
+    private static final int CAVE_RAYCAST_DISTANCE_STEP = 2;
+    private static final int EXPLORATION_NEED_CHUNK_RADIUS = 2;
+    private static final int CAVE_CUE_REACHED_RADIUS = 4;
+    private static final int CAVE_CUE_PROBE_TIMEOUT_TICKS = 20 * 20;
+    private static final int EXPLORER_NO_TARGET_ABORT_TICKS = 20 * 60 * 30;
+    private static final int EXPLORER_FALLBACK_UNLOCK_TICKS = 20 * 25;
+    private static final int EXPLORER_RETARGET_COOLDOWN_TICKS = 20 * 4;
+    private static final int EXPLORER_TARGET_COMMIT_TICKS = 20 * 10;
+    private static final int EXPLORER_REGION_NO_TARGET_BUDGET_TICKS = 20 * 16;
+    private static final int EXPLORER_REGION_FAILURE_BUDGET = 6;
+    private static final int EXPLORER_REGION_NON_PROGRESS_MINE_BUDGET = 18;
+    private static final int EXPLORER_REGION_EXHAUSTED_TTL_TICKS = 20 * 120;
     private static final int SEARCH_IDLE_FORCE_MOVE_TICKS = 60;
     private static final double SEARCH_IDLE_MOVE_EPSILON_SQR = 0.04; // ~0.2 blocks
     private static final int RESCAN_INTERVAL = 2;
     private static final int TARGET_STALL_TICKS = 60;
+    private static final int LOCAL_REEVALUATION_COOLDOWN_TICKS = 8;
+    private static final int LOCAL_REEVALUATION_STALE_TICKS = 20;
+    private static final int LOCAL_REEVALUATION_MOVEMENT_TICKS = 12;
+    private static final int STUCK_LOG_REPEAT_TICKS = 80;
+    private static final int LOCAL_TARGET_DEFER_TICKS = 20;
     private static final int MINING_DURATION = 40;
     private static final double MINING_INTERACTION_RANGE_SQR = 25.0; // ~5 blocks like normal player reach
     private static final int BLOCKED_TARGET_TTL = 80;
@@ -86,10 +112,15 @@ public class MineBlockAction extends BaseAction {
     private static final int COAL_BASE_SCAN_RADIUS = 10;
     private static final int COAL_BASE_EXPLORE_RADIUS = 24;
     private static final int COAL_MAX_EXPLORE_RADIUS = 112;
+    private static final int NO_TARGET_PROBE_MIN_TICKS = 40;
+    private static final int NO_TARGET_PROBE_INTERVAL = 20;
     private int movementStuckTicks = 0;
     private int noTargetTicks = 0;
     private int waterReplanCooldown = 0;
     private boolean coalDeepSearchMode = false;
+    private boolean explorerFallbackUnlocked = false;
+    private BlockPos activeCaveCueTarget;
+    private int activeCaveCueStartTick;
     private boolean lastInWater = false;
     private int waterSegmentTicks = 0;
     private BlockPos lastWaterRecoveryTarget;
@@ -104,11 +135,34 @@ public class MineBlockAction extends BaseAction {
     private int scanRadius = BASE_SCAN_RADIUS;
     private int exploreRadius = EXPLORE_BASE_RADIUS;
     private final Map<BlockPos, Integer> blockedTargets = new HashMap<>();
+    private final Map<BlockPos, Integer> blockedTargetStrikes = new HashMap<>();
     private final Deque<BlockPos> obstructionQueue = new ArrayDeque<>();
     private final Set<BlockPos> obstructionSet = new HashSet<>();
+    private final SearchController searchController = new SearchController(
+        EXPLORER_RETARGET_COOLDOWN_TICKS,
+        EXPLORER_TARGET_COMMIT_TICKS
+    );
+    private final LocalReevaluationPolicy localReevaluationPolicy = new LocalReevaluationPolicy(
+        LOCAL_REEVALUATION_COOLDOWN_TICKS,
+        LOCAL_REEVALUATION_STALE_TICKS,
+        LOCAL_REEVALUATION_MOVEMENT_TICKS,
+        4.0,
+        16.0
+    );
+    private final RegionBudgetManager regionBudgetManager = new RegionBudgetManager(
+        EXPLORER_REGION_NO_TARGET_BUDGET_TICKS,
+        EXPLORER_REGION_FAILURE_BUDGET,
+        EXPLORER_REGION_NON_PROGRESS_MINE_BUDGET,
+        EXPLORER_REGION_EXHAUSTED_TTL_TICKS
+    );
     private BlockPos lastMinedReference;
     private BlockPos actualTarget;
     private ToolRequirement toolRequirement = ToolRequirement.NONE;
+    private StevePersona persona = StevePersona.TUNNELER;
+    private long lastLocalRetargetTick = Long.MIN_VALUE / 4;
+    private StuckReason currentStuckReason = StuckReason.NONE;
+    private int stuckReasonStartTick = 0;
+    private int lastStuckLogTick = Integer.MIN_VALUE / 4;
     private static final List<String> WOOD_PRIMARY_BLOCK_IDS = List.of(
         "minecraft:oak_log",
         "minecraft:spruce_log",
@@ -160,6 +214,9 @@ public class MineBlockAction extends BaseAction {
         noTargetTicks = 0;
         waterReplanCooldown = 0;
         coalDeepSearchMode = false;
+        explorerFallbackUnlocked = false;
+        activeCaveCueTarget = null;
+        activeCaveCueStartTick = 0;
         lastInWater = steve.isInWater();
         waterSegmentTicks = 0;
         lastWaterRecoveryTarget = null;
@@ -172,16 +229,24 @@ public class MineBlockAction extends BaseAction {
         exploreTarget = null;
         searchIdleTicks = 0;
         blockedTargets.clear();
+        blockedTargetStrikes.clear();
         obstructionQueue.clear();
         obstructionSet.clear();
+        searchController.reset();
+        regionBudgetManager.reset();
         lastMinedReference = steve.blockPosition().immutable();
         actualTarget = null;
+        lastLocalRetargetTick = Long.MIN_VALUE / 4;
+        currentStuckReason = StuckReason.NONE;
+        stuckReasonStartTick = 0;
+        lastStuckLogTick = Integer.MIN_VALUE / 4;
         lastSearchX = steve.getX();
         lastSearchY = steve.getY();
         lastSearchZ = steve.getZ();
         
         targetBlock = parseBlock(blockName);
         genericWoodRequest = isGenericWoodRequest(blockName);
+        persona = StevePersonaProfiles.forSteveName(steve.getSteveName());
 
         if (targetBlock == null || targetBlock == Blocks.AIR) {
             steve.setDebugTargetBlock(null);
@@ -193,6 +258,10 @@ public class MineBlockAction extends BaseAction {
         if (isCoalTask()) {
             scanRadius = COAL_BASE_SCAN_RADIUS;
             exploreRadius = COAL_BASE_EXPLORE_RADIUS;
+        }
+        if (persona.prefersCaveExploration() && isOreTask()) {
+            scanRadius = Math.max(scanRadius, 10);
+            exploreRadius = Math.max(exploreRadius, 32);
         }
         acceptableBlockIds.clear();
         acceptableBlockIds.add(targetBlockId);
@@ -235,6 +304,12 @@ public class MineBlockAction extends BaseAction {
         
         SteveMod.LOGGER.info("Steve '{}' mining {} - using perception snapshot", 
             steve.getSteveName(), targetBlock.getName().getString());
+        SteveMod.LOGGER.info(
+            "Steve '{}' mining persona={} targetBlock={}",
+            steve.getSteveName(),
+            persona,
+            targetBlockId
+        );
         steve.forceVisibleScan(scanRadius);
         currentTarget = findNearestVisibleTarget();
         syncDebugTarget();
@@ -259,6 +334,16 @@ public class MineBlockAction extends BaseAction {
             // blockedTargets stores "valid until tick"; drop entries that expired.
             blockedTargets.entrySet().removeIf(entry -> entry.getValue() <= ticksRunning);
         }
+
+        boolean rescannedThisTick = false;
+        if (ticksSinceRescan >= RESCAN_INTERVAL) {
+            steve.forceVisibleScan(scanRadius);
+            ticksSinceRescan = 0;
+            rescannedThisTick = true;
+            if (maybeRefreshLocalVisibleTarget(currentTarget == null ? "search" : "move")) {
+                return;
+            }
+        }
         
         if (ticksRunning > MAX_TICKS) {
             steve.setInvulnerableBuilding(false);
@@ -279,27 +364,48 @@ public class MineBlockAction extends BaseAction {
         
         if (currentTarget == null) {
             updateSearchIdleCounter();
-            if (ticksSinceRescan >= RESCAN_INTERVAL) {
-                steve.forceVisibleScan(scanRadius);
+            if (handleExplorerCaveProbeProgress()) {
+                return;
+            }
+            if (rescannedThisTick) {
                 logSearchDiagnostics();
-                ticksSinceRescan = 0;
             }
             BlockPos nextTarget = findNextTarget();
             if (nextTarget != null) {
                 assignActualTarget(nextTarget);
                 noTargetTicks = 0;
+                clearStuckReason("target-acquired");
             }
 
             if (currentTarget == null) {
                 // For ore/stone style goals, avoid random digging and expand a deterministic
                 // local frontier around the last mined block so tunnels remain coherent.
-                if (shouldAllowSubsurfaceFallback() && queueStructuredFrontierDig()) {
+                if ((persona.prefersTunneling() || explorerFallbackUnlocked)
+                    && shouldAllowSubsurfaceFallback()
+                    && queueStructuredFrontierDig()) {
                     currentTarget = resolveCurrentTarget();
                     noTargetTicks = 0;
                     syncDebugTarget();
                     return;
                 }
                 noTargetTicks++;
+                if (searchIdleTicks >= SEARCH_IDLE_FORCE_MOVE_TICKS / 2) {
+                    noteStuckReason(StuckReason.SEARCH_LOOP, "search branch active without useful movement");
+                } else {
+                    noteStuckReason(StuckReason.NO_VISIBLE_TARGET, "no visible or reachable target during active search");
+                }
+                noteExplorerNoTargetBudget();
+                if (maybeExhaustExplorerRegionAndRelocate("no-target-budget")) {
+                    return;
+                }
+                maybeUnlockExplorerFallback();
+                if (noTargetTicks >= NO_TARGET_PROBE_MIN_TICKS
+                    && noTargetTicks % NO_TARGET_PROBE_INTERVAL == 0
+                    && queueNoTargetProbeDig()) {
+                    currentTarget = resolveCurrentTarget();
+                    syncDebugTarget();
+                    return;
+                }
                 if (isCoalTask() && !coalDeepSearchMode && noTargetTicks >= COAL_SWITCH_TO_DEEP_SEARCH_TICKS) {
                     coalDeepSearchMode = true;
                     scanRadius = Math.max(scanRadius, MAX_SCAN_RADIUS);
@@ -313,13 +419,14 @@ public class MineBlockAction extends BaseAction {
                         exploreRadius
                     );
                 }
-                if (noTargetTicks >= NO_TARGET_ABORT_TICKS) {
+                int noTargetAbortTicks = getNoTargetAbortTicks();
+                if (noTargetTicks >= noTargetAbortTicks) {
                     steve.setInvulnerableBuilding(false);
                     steve.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
                     steve.setDebugTargetBlock(null);
                     result = ActionResult.failure(
                         "No valid mining target for " + targetBlock.getName().getString()
-                            + " after prolonged search (" + NO_TARGET_ABORT_TICKS + " ticks)"
+                            + " after prolonged search (" + noTargetAbortTicks + " ticks)"
                     );
                     return;
                 }
@@ -350,18 +457,12 @@ public class MineBlockAction extends BaseAction {
                     return;
                 }
                 ticksSinceExplore++;
-                if (ticksSinceExplore >= EXPLORE_RETRY_INTERVAL) {
+                int exploreRetryInterval = persona.prefersCaveExploration()
+                    ? Math.max(8, EXPLORE_RETRY_INTERVAL / 2)
+                    : EXPLORE_RETRY_INTERVAL;
+                if (ticksSinceExplore >= exploreRetryInterval) {
                     ticksSinceExplore = 0;
-                    exploreTarget = pickMemoryDrivenExploreTarget();
-                    if (exploreTarget == null && isCoalTask()) {
-                        exploreTarget = pickCoalExploreTarget();
-                    }
-                    if (exploreTarget == null) {
-                        exploreTarget = pickDirectedExploreTarget();
-                    }
-                    if (exploreTarget == null) {
-                        exploreTarget = pickExploreTarget();
-                    }
+                    exploreTarget = selectExploreTarget();
                     if (exploreTarget != null) {
                         boolean moved = steve.getNavigation().moveTo(
                             exploreTarget.getX() + 0.5,
@@ -375,21 +476,13 @@ public class MineBlockAction extends BaseAction {
                         } else {
                             if (isViableBlockCenter(exploreTarget)) {
                                 markBlockedCluster(exploreTarget, "explore path failed");
+                                noteExplorerFailure(exploreTarget, "explore-path-failed");
                             }
                         }
                     }
                 }
                 if (searchIdleTicks >= SEARCH_IDLE_FORCE_MOVE_TICKS) {
-                    BlockPos forced = pickMemoryDrivenExploreTarget();
-                    if (forced == null && isCoalTask()) {
-                        forced = pickCoalExploreTarget();
-                    }
-                    if (forced == null) {
-                        forced = pickDirectedExploreTarget();
-                    }
-                    if (forced == null) {
-                        forced = pickExploreTarget();
-                    }
+                    BlockPos forced = selectExploreTarget();
                     if (forced != null) {
                         exploreTarget = forced;
                         boolean moved = steve.getNavigation().moveTo(
@@ -409,6 +502,7 @@ public class MineBlockAction extends BaseAction {
                         } else {
                             if (isViableBlockCenter(forced)) {
                                 markBlockedCluster(forced, "forced move path failed");
+                                noteExplorerFailure(forced, "forced-move-path-failed");
                             }
                         }
                     }
@@ -417,6 +511,7 @@ public class MineBlockAction extends BaseAction {
             }
             searchTicks = 0;
             noTargetTicks = 0;
+            clearStuckReason("search-progress");
             scanRadius = isCoalTask() ? COAL_BASE_SCAN_RADIUS : BASE_SCAN_RADIUS;
             steve.forceVisibleScan(scanRadius);
         }
@@ -435,6 +530,14 @@ public class MineBlockAction extends BaseAction {
             } else {
                 targetStallTicks = 0;
                 lastTargetDistance = distance;
+                if (movementStuckTicks == 0) {
+                    clearStuckReason("approach-progress");
+                }
+            }
+            if (targetStallTicks >= LOCAL_REEVALUATION_STALE_TICKS) {
+                noteStuckReason(StuckReason.STALE_TARGET, "distance to target stopped improving");
+            } else if (movementStuckTicks >= LOCAL_REEVALUATION_MOVEMENT_TICKS) {
+                noteStuckReason(StuckReason.NO_PROGRESS_WHILE_MOVING, "movement stalled while target remained active");
             }
             if (targetStallTicks >= TARGET_STALL_TICKS) {
                 BlockPos anchor = findApproachAnchor(currentTarget);
@@ -453,7 +556,7 @@ public class MineBlockAction extends BaseAction {
                     );
                     return;
                 }
-                if (shouldAllowSubsurfaceFallback()) {
+                if (allowDigThroughFallback()) {
                     buildObstructionQueue(currentTarget);
                     if (obstructionQueue.isEmpty()) {
                         queueDigStepTowardTarget(currentTarget);
@@ -475,6 +578,7 @@ public class MineBlockAction extends BaseAction {
                 }
                 SteveMod.LOGGER.info("Steve '{}' stuck approaching target {}; forcing rescan", steve.getSteveName(), currentTarget);
                 markBlockedCluster(currentTarget, "stuck approaching target");
+                noteExplorerFailure(currentTarget, "stuck-approaching-target");
                 currentTarget = null;
                 targetStallTicks = 0;
                 lastTargetDistance = Double.MAX_VALUE;
@@ -499,9 +603,10 @@ public class MineBlockAction extends BaseAction {
                     }
                 }
                 if (!moved) {
-                    if (isWoodTask() || shouldAllowSubsurfaceFallback()) {
+                    noteStuckReason(StuckReason.UNREACHABLE_TARGET, "navigation could not reach current target");
+                    if (isWoodTask() || allowDigThroughFallback()) {
                         buildObstructionQueue(currentTarget);
-                        if (obstructionQueue.isEmpty() && shouldAllowSubsurfaceFallback()) {
+                        if (obstructionQueue.isEmpty() && allowDigThroughFallback()) {
                             queueDigStepTowardTarget(currentTarget);
                         }
                         if (!obstructionQueue.isEmpty()) {
@@ -511,6 +616,7 @@ public class MineBlockAction extends BaseAction {
                         }
                     }
                     markBlockedCluster(currentTarget, "navigation move failed");
+                    noteExplorerFailure(currentTarget, "navigation-move-failed");
                     currentTarget = null;
                     targetRecoveryAttempts = 0;
                     steve.forceVisibleScan(scanRadius);
@@ -545,6 +651,9 @@ public class MineBlockAction extends BaseAction {
             mineAndCollect(minedPos);
             if (countsTowardTarget) {
                 minedCount++;
+                regionBudgetManager.noteProgress(minedPos);
+            } else if (persona.prefersCaveExploration() && isOreTask()) {
+                regionBudgetManager.noteNonProgressMine(minedPos);
             }
             ticksSinceLastMine = 0; // Reset delay timer
             steve.forceVisibleScan(scanRadius);
@@ -553,6 +662,7 @@ public class MineBlockAction extends BaseAction {
             lastTargetDistance = Double.MAX_VALUE;
             miningProgressTicks = 0;
             lastMiningTarget = null;
+            clearStuckReason("block-mined");
             handleBlockMined(minedPos);
             
             SteveMod.LOGGER.info(
@@ -580,6 +690,7 @@ public class MineBlockAction extends BaseAction {
             if (currentTarget != null && isViableBlockCenter(currentTarget)) {
                 markBlocked(currentTarget, "target no longer acceptable (" + targetId + ")");
             }
+            noteStuckReason(StuckReason.UNREACHABLE_TARGET, "current target became unacceptable");
             currentTarget = null;
             targetRecoveryAttempts = 0;
             syncDebugTarget();
@@ -595,11 +706,16 @@ public class MineBlockAction extends BaseAction {
         obstructionQueue.clear();
         obstructionSet.clear();
         actualTarget = null;
+        activeCaveCueTarget = null;
+        activeCaveCueStartTick = 0;
     }
 
     @Override
     public String getDescription() {
         String base = "Mine " + targetQuantity + " " + targetBlock.getName().getString() + " (" + minedCount + " found)";
+        if (currentStuckReason.isStuck()) {
+            base += " stuck=" + currentStuckReason.name().toLowerCase(java.util.Locale.ROOT);
+        }
         if (currentTarget != null) {
             return base + " target=" + currentTarget.getX() + "," + currentTarget.getY() + "," + currentTarget.getZ();
         }
@@ -698,7 +814,7 @@ public class MineBlockAction extends BaseAction {
             if (!acceptableBlockIds.contains(entry.blockId())) {
                 continue;
             }
-            if (!isWoodTask() && !isOreTask() && isNearBlockedTarget(entry.position(), BLOCKED_CLUSTER_RADIUS)) {
+            if (isNearBlockedTarget(entry.position(), BLOCKED_CLUSTER_RADIUS)) {
                 continue;
             }
             if (!isReachableTarget(entry.position())) {
@@ -805,11 +921,411 @@ public class MineBlockAction extends BaseAction {
             }
             BlockPos probe = origin.offset(dir[0] * distance, 0, dir[1] * distance);
             BlockPos ground = findGroundAbove(probe);
+            if (isExplorerRegionExhausted(ground)) {
+                continue;
+            }
             if (isViableExploreDestination(ground)) {
                 return ground.immutable();
             }
         }
         return null;
+    }
+
+    private BlockPos selectExploreTarget() {
+        BlockPos selected = null;
+
+        if (persona.prefersCaveExploration() && isOreTask()) {
+            BlockPos committed = searchController.committedTargetAt(ticksRunning);
+            if (committed != null) {
+                if (isViableExploreDestination(committed) && !isExplorerRegionExhausted(committed)) {
+                    return committed.immutable();
+                }
+                searchController.clearCommitment();
+            }
+            if (!searchController.canSelectNewTarget(ticksRunning)) {
+                return null;
+            }
+        }
+
+        selected = pickMemoryDrivenExploreTarget();
+        if (selected == null && persona.prefersCaveExploration() && isOreTask()) {
+            selected = pickRaycastCaveCueTarget();
+            rememberCaveCueTarget(selected);
+        }
+        if (selected == null && persona.prefersCaveExploration() && isOreTask()) {
+            selected = pickCaveCueExploreTarget();
+            rememberCaveCueTarget(selected);
+        }
+        if (selected == null && isCoalTask()) {
+            selected = pickCoalExploreTarget();
+        }
+        if (selected == null) {
+            selected = pickDirectedExploreTarget();
+        }
+        if (selected == null) {
+            selected = pickExploreTarget();
+        }
+
+        if (selected != null && persona.prefersCaveExploration() && isOreTask()) {
+            searchController.commitTarget(selected, ticksRunning);
+        }
+        return selected;
+    }
+
+    private boolean isExplorerRegionExhausted(BlockPos pos) {
+        if (!persona.prefersCaveExploration() || !isOreTask()) {
+            return false;
+        }
+        return regionBudgetManager.isExhausted(pos, ticksRunning);
+    }
+
+    private void noteExplorerNoTargetBudget() {
+        if (!persona.prefersCaveExploration() || !isOreTask()) {
+            return;
+        }
+        regionBudgetManager.noteNoTarget(steve.blockPosition(), ticksRunning);
+    }
+
+    private void noteExplorerFailure(BlockPos pos, String reason) {
+        if (!persona.prefersCaveExploration() || !isOreTask()) {
+            return;
+        }
+        regionBudgetManager.noteFailure(pos != null ? pos : steve.blockPosition());
+        if (regionBudgetManager.shouldExhaust(pos != null ? pos : steve.blockPosition(), ticksRunning)) {
+            regionBudgetManager.exhaust(pos != null ? pos : steve.blockPosition(), ticksRunning);
+            searchController.clearCommitment();
+            SteveMod.LOGGER.info(
+                "Steve '{}' [explorer] exhausted region due {} at {}",
+                steve.getSteveName(),
+                reason,
+                pos
+            );
+        }
+    }
+
+    private boolean maybeExhaustExplorerRegionAndRelocate(String reason) {
+        if (!persona.prefersCaveExploration() || !isOreTask()) {
+            return false;
+        }
+        BlockPos anchor = steve.blockPosition();
+        if (!regionBudgetManager.shouldExhaust(anchor, ticksRunning)) {
+            return false;
+        }
+        regionBudgetManager.exhaust(anchor, ticksRunning);
+        searchController.clearCommitment();
+        activeCaveCueTarget = null;
+        activeCaveCueStartTick = 0;
+        exploreTarget = null;
+        ticksSinceExplore = EXPLORE_RETRY_INTERVAL;
+        noTargetTicks = 0;
+        SteveMod.LOGGER.info(
+            "Steve '{}' [explorer] exhausted current region {} (reason={}); forcing relocation cycle",
+            steve.getSteveName(),
+            anchor,
+            reason
+        );
+        return true;
+    }
+
+    private BlockPos pickCaveCueExploreTarget() {
+        BlockPos origin = steve.blockPosition();
+        BlockPos best = null;
+        double bestScore = Double.NEGATIVE_INFINITY;
+
+        List<VisibleBlockEntry> entries = steve.getMemory().getVisibleBlocks();
+        for (VisibleBlockEntry entry : entries) {
+            BlockPos pos = entry.position();
+            if (origin.distSqr(pos) > (double) (CAVE_CUE_SCAN_RADIUS * CAVE_CUE_SCAN_RADIUS)) {
+                continue;
+            }
+            if (steve.getMemory().isCaveChunkExplored(pos)) {
+                continue;
+            }
+
+            BlockPos candidate = chooseCandidateWalkPos(pos);
+            if (candidate == null || !isViableExploreDestination(candidate)) {
+                continue;
+            }
+            if (isExplorerRegionExhausted(candidate)) {
+                continue;
+            }
+
+            double score = caveCueScore(candidate, entry.blockId(), origin);
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate.immutable();
+            }
+        }
+
+        if (best != null) {
+            SteveMod.LOGGER.info(
+                "Steve '{}' [explorer] cave-cue target selected {} score={}",
+                steve.getSteveName(),
+                best,
+                String.format(java.util.Locale.ROOT, "%.2f", bestScore)
+            );
+        }
+        return best;
+    }
+
+    private BlockPos pickRaycastCaveCueTarget() {
+        if (!(steve.level() instanceof ServerLevel serverLevel)) {
+            return null;
+        }
+        BlockPos origin = steve.blockPosition();
+        Vec3 eye = steve.getEyePosition(1.0F);
+        float baseYaw = steve.getYRot();
+
+        int[] yawOffsets = new int[]{0, -25, 25, -50, 50, -75, 75, -100, 100, -130, 130, -160, 160, 180};
+        int[] pitchAngles = new int[]{-16, -8, 0, 8};
+
+        BlockPos best = null;
+        double bestScore = Double.NEGATIVE_INFINITY;
+        List<Vec3> leastSeenDirVectors = getLeastSeenDirectionVectors();
+
+        for (int yawOffset : yawOffsets) {
+            float yaw = baseYaw + yawOffset;
+            for (int pitch : pitchAngles) {
+                Vec3 direction = unitVectorFromYawPitch(yaw, pitch);
+                if (direction.lengthSqr() <= 1.0e-6) {
+                    continue;
+                }
+                for (int dist = CAVE_RAYCAST_MIN_DISTANCE; dist <= CAVE_RAYCAST_MAX_DISTANCE; dist += CAVE_RAYCAST_DISTANCE_STEP) {
+                    Vec3 sample = eye.add(direction.scale(dist));
+                    BlockPos probe = BlockPos.containing(sample);
+                    BlockPos candidate = chooseCandidateWalkPos(probe);
+                    if (candidate == null || !isViableExploreDestination(candidate)) {
+                        continue;
+                    }
+                    if (isExplorerRegionExhausted(candidate)) {
+                        continue;
+                    }
+                    if (steve.getMemory().isCaveChunkExplored(candidate)) {
+                        continue;
+                    }
+
+                    BlockState probeState = serverLevel.getBlockState(probe);
+                    String probeId = BuiltInRegistries.BLOCK.getKey(probeState.getBlock()).toString();
+                    double score = caveCueScore(candidate, probeId, origin);
+
+                    // Favor near-forward directions so "where Steve looks" matters.
+                    score -= Math.abs(yawOffset) * 0.06;
+                    // Prefer farther hits moderately to unlock long-range cave discovery.
+                    score += dist * 0.08;
+                    // Prefer slight downward probes for cave mouths/valleys.
+                    score += Math.max(0, -pitch) * 0.12;
+                    // Strongly bias toward least-covered direction clusters.
+                    score += coverageDirectionBonus(direction, leastSeenDirVectors);
+                    // Prefer chunk regions with low episodic observation density.
+                    score += steve.getMemory().getExplorationNeedScore(candidate, EXPLORATION_NEED_CHUNK_RADIUS) * 8.0;
+
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = candidate.immutable();
+                    }
+                }
+            }
+        }
+
+        if (best != null) {
+            SteveMod.LOGGER.info(
+                "Steve '{}' [explorer] ray-cave target selected {} score={} needScore={} chunkObs={}",
+                steve.getSteveName(),
+                best,
+                String.format(java.util.Locale.ROOT, "%.2f", bestScore),
+                String.format(
+                    java.util.Locale.ROOT,
+                    "%.2f",
+                    steve.getMemory().getExplorationNeedScore(best, EXPLORATION_NEED_CHUNK_RADIUS)
+                ),
+                steve.getMemory().getEpisodicObservationCountForChunk(best)
+            );
+        }
+        return best;
+    }
+
+    private Vec3 unitVectorFromYawPitch(float yawDeg, float pitchDeg) {
+        float yaw = (float) Math.toRadians(-yawDeg - 180.0F);
+        float pitch = (float) Math.toRadians(-pitchDeg);
+        float x = (float) (Math.sin(yaw) * Math.cos(pitch));
+        float y = (float) Math.sin(pitch);
+        float z = (float) (Math.cos(yaw) * Math.cos(pitch));
+        return new Vec3(x, y, z);
+    }
+
+    private List<Vec3> getLeastSeenDirectionVectors() {
+        List<String> leastSeen = steve.getMemory().getLeastSeenDirections(8);
+        List<Vec3> vectors = new java.util.ArrayList<>();
+        for (String label : leastSeen) {
+            String yaw = label;
+            int dash = label.indexOf('-');
+            if (dash > 0) {
+                yaw = label.substring(0, dash);
+            }
+            int[] dir = yawToVector(yaw);
+            if (dir == null) {
+                continue;
+            }
+            Vec3 vec = new Vec3(dir[0], 0.0, dir[1]);
+            if (vec.lengthSqr() > 0.0) {
+                vectors.add(vec.normalize());
+            }
+        }
+        return vectors;
+    }
+
+    private double coverageDirectionBonus(Vec3 direction, List<Vec3> needVectors) {
+        if (direction == null || needVectors == null || needVectors.isEmpty()) {
+            return 0.0;
+        }
+        Vec3 flat = new Vec3(direction.x, 0.0, direction.z);
+        if (flat.lengthSqr() <= 1.0e-6) {
+            return 0.0;
+        }
+        Vec3 normalized = flat.normalize();
+        double bestDot = -1.0;
+        for (Vec3 need : needVectors) {
+            bestDot = Math.max(bestDot, normalized.dot(need));
+        }
+        // 0..~4 bonus; strongest when direction aligns with least-seen headings.
+        return Math.max(0.0, bestDot) * 4.0;
+    }
+
+    private BlockPos chooseCandidateWalkPos(BlockPos source) {
+        if (source == null) {
+            return null;
+        }
+        BlockPos above = source.above();
+        if (isViableExploreDestination(above)) {
+            return above;
+        }
+        BlockPos ground = findGroundAbove(source);
+        if (isViableExploreDestination(ground)) {
+            return ground;
+        }
+        return isViableExploreDestination(source) ? source : null;
+    }
+
+    private double caveCueScore(BlockPos candidate, String blockId, BlockPos origin) {
+        if (candidate == null || origin == null) {
+            return Double.NEGATIVE_INFINITY;
+        }
+        double score = 0.0;
+
+        // Prefer nearby candidates so exploration stays coherent.
+        score -= Math.sqrt(origin.distSqr(candidate)) * 0.7;
+
+        // Prefer lower Y for ore exploration.
+        score += Math.max(0, origin.getY() - candidate.getY()) * 1.25;
+
+        // Prefer navigable spaces with multiple open neighbors (cave-like openness).
+        int openNeighbors = countOpenNeighbors(candidate);
+        score += openNeighbors * 2.25;
+
+        // Strong bonus for depth cues (drop / air pocket below).
+        if (hasDepthCue(candidate)) {
+            score += 9.0;
+        }
+
+        // Favor stone-like geology as cave hints.
+        if (isStoneLikeId(blockId)) {
+            score += 2.5;
+        }
+        if (blockId != null && blockId.endsWith("_ore")) {
+            score += 4.0;
+        }
+        return score;
+    }
+
+    private int countOpenNeighbors(BlockPos pos) {
+        int open = 0;
+        if (pos == null) {
+            return open;
+        }
+        for (Direction direction : Direction.values()) {
+            BlockState neighbor = steve.level().getBlockState(pos.relative(direction));
+            if (isOpenAdjacentBlock(neighbor)) {
+                open++;
+            }
+        }
+        return open;
+    }
+
+    private boolean hasDepthCue(BlockPos pos) {
+        if (pos == null) {
+            return false;
+        }
+        // Air underfoot or within a short vertical probe is a strong cave-mouth signal.
+        for (int d = 1; d <= 4; d++) {
+            BlockPos check = pos.below(d);
+            BlockState state = steve.level().getBlockState(check);
+            if (state.isAir() || state.is(Blocks.CAVE_AIR) || state.is(Blocks.VOID_AIR)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean handleExplorerCaveProbeProgress() {
+        if (!persona.prefersCaveExploration() || !isOreTask() || activeCaveCueTarget == null) {
+            return false;
+        }
+
+        long age = ticksRunning - activeCaveCueStartTick;
+        if (age >= CAVE_CUE_PROBE_TIMEOUT_TICKS) {
+            exhaustActiveCaveCue("probe-timeout");
+            return false;
+        }
+
+        if (!steve.blockPosition().closerThan(activeCaveCueTarget, CAVE_CUE_REACHED_RADIUS)) {
+            return false;
+        }
+
+        steve.forceVisibleScan(Math.max(scanRadius, 12));
+        BlockPos candidate = findNextTarget();
+        if (candidate != null) {
+            assignActualTarget(candidate);
+            activeCaveCueTarget = null;
+            activeCaveCueStartTick = 0;
+            return true;
+        }
+
+        exhaustActiveCaveCue("cave-scanned-no-target");
+        return false;
+    }
+
+    private void exhaustActiveCaveCue(String reason) {
+        if (activeCaveCueTarget == null) {
+            return;
+        }
+        steve.getMemory().markCaveChunkExplored(activeCaveCueTarget);
+        markBlockedCluster(activeCaveCueTarget, "explorer cave exhausted");
+        regionBudgetManager.exhaust(activeCaveCueTarget, ticksRunning);
+        searchController.clearCommitment();
+        SteveMod.LOGGER.info(
+            "Steve '{}' [explorer] exhausted cave cue {} reason={} exploredCaveChunks={}",
+            steve.getSteveName(),
+            activeCaveCueTarget,
+            reason,
+            steve.getMemory().getExploredCaveChunkCount()
+        );
+        activeCaveCueTarget = null;
+        activeCaveCueStartTick = 0;
+        exploreTarget = null;
+        // Force immediate selection of another cave candidate.
+        ticksSinceExplore = EXPLORE_RETRY_INTERVAL;
+    }
+
+    private boolean isStoneLikeId(String blockId) {
+        if (blockId == null || blockId.isBlank()) {
+            return false;
+        }
+        return blockId.contains("stone")
+            || blockId.contains("deepslate")
+            || blockId.contains("andesite")
+            || blockId.contains("diorite")
+            || blockId.contains("granite")
+            || blockId.contains("tuff");
     }
 
     private int[] yawToVector(String yaw) {
@@ -1004,14 +1520,17 @@ public class MineBlockAction extends BaseAction {
             return;
         }
         // Keep problematic ore targets blocked longer to prevent immediate reselection loops.
-        int ttl = blockedTtlFor(reason);
+        BlockPos key = pos.immutable();
+        int strikes = blockedTargetStrikes.merge(key, 1, Integer::sum);
+        int ttl = blockedTtlFor(reason) + strikeTtlBonus(strikes);
         blockedTargets.put(pos.immutable(), ticksRunning + ttl);
         SteveMod.LOGGER.info(
-            "Steve '{}' rejected target {} ({}); blocking for {} ticks",
+            "Steve '{}' rejected target {} ({}); blocking for {} ticks (strike={})",
             steve.getSteveName(),
             pos,
             reason,
-            ttl
+            ttl,
+            strikes
         );
     }
 
@@ -1019,6 +1538,12 @@ public class MineBlockAction extends BaseAction {
         if (center == null) {
             return;
         }
+        BlockPos centerKey = center.immutable();
+        if (isBlockedTarget(centerKey)) {
+            return;
+        }
+        int strikes = blockedTargetStrikes.merge(centerKey, 1, Integer::sum);
+        int ttl = blockedTtlFor(reason) + strikeTtlBonus(strikes);
         for (int dx = -BLOCKED_CLUSTER_RADIUS; dx <= BLOCKED_CLUSTER_RADIUS; dx++) {
             for (int dy = -1; dy <= 1; dy++) {
                 for (int dz = -BLOCKED_CLUSTER_RADIUS; dz <= BLOCKED_CLUSTER_RADIUS; dz++) {
@@ -1026,17 +1551,76 @@ public class MineBlockAction extends BaseAction {
                     if (isBlockedTarget(pos)) {
                         continue;
                     }
-                    blockedTargets.put(pos.immutable(), ticksRunning + blockedTtlFor(reason));
+                    blockedTargets.put(pos.immutable(), ticksRunning + ttl);
                 }
             }
         }
         SteveMod.LOGGER.info(
-            "Steve '{}' blocked target cluster around {} ({}), ttl={} ticks",
+            "Steve '{}' blocked target cluster around {} ({}), ttl={} ticks (strike={})",
             steve.getSteveName(),
             center,
             reason,
-            BLOCKED_TARGET_TTL
+            ttl,
+            strikes
         );
+    }
+
+    private boolean queueNoTargetProbeDig() {
+        boolean explorerEarlyProbe = persona.prefersCaveExploration()
+            && isOreTask()
+            && noTargetTicks >= 20 * 12;
+        if (!(allowDigThroughFallback() || (shouldAllowSubsurfaceFallback() && explorerEarlyProbe))) {
+            return false;
+        }
+        BlockPos probe = pickMemoryDrivenExploreTarget();
+        if (probe == null && persona.prefersCaveExploration() && isOreTask()) {
+            probe = pickRaycastCaveCueTarget();
+        }
+        if (probe == null && persona.prefersCaveExploration() && isOreTask()) {
+            probe = pickCaveCueExploreTarget();
+        }
+        if (probe == null && isCoalTask()) {
+            probe = pickCoalExploreTarget();
+        }
+        if (probe == null) {
+            probe = pickDirectedExploreTarget();
+        }
+        if (probe == null) {
+            probe = pickExploreTarget();
+        }
+
+        if (probe != null) {
+            if (isExplorerRegionExhausted(probe)) {
+                return false;
+            }
+            queueDigStepTowardTarget(probe);
+        }
+        if (obstructionQueue.isEmpty() && shouldAllowSubsurfaceFallback()) {
+            queueStructuredFrontierDig();
+        }
+        if (obstructionQueue.isEmpty()) {
+            return false;
+        }
+        SteveMod.LOGGER.info(
+            "Steve '{}' queued no-target probe dig for {} (probe={}, queued={})",
+            steve.getSteveName(),
+            targetBlock.getName().getString(),
+            probe,
+            obstructionQueue.peekFirst()
+        );
+        return true;
+    }
+
+    private void rememberCaveCueTarget(BlockPos target) {
+        if (target == null) {
+            return;
+        }
+        BlockPos immutable = target.immutable();
+        if (immutable.equals(activeCaveCueTarget)) {
+            return;
+        }
+        activeCaveCueTarget = immutable;
+        activeCaveCueStartTick = ticksRunning;
     }
 
     private boolean isNearBlockedTarget(BlockPos pos, int radius) {
@@ -1073,6 +1657,14 @@ public class MineBlockAction extends BaseAction {
         return BLOCKED_TARGET_TTL;
     }
 
+    private int strikeTtlBonus(int strikes) {
+        if (strikes <= 1) {
+            return 0;
+        }
+        // Escalate cooldown for repeated unreachable targets to break reselection loops.
+        return Math.min(1200, (strikes - 1) * 200);
+    }
+
     private void logSearchDiagnostics() {
         int visibleCount = steve.getMemory().getVisibleBlocks().size();
         int visibleMatches = 0;
@@ -1084,13 +1676,15 @@ public class MineBlockAction extends BaseAction {
         BlockPos nearestAny = findNearestAcceptableIgnoringReachability();
         int cubeMatches = countAcceptableInRadius();
         SteveMod.LOGGER.info(
-            "Steve '{}' search diag: scanRadius={} visible={} visibleMatches={} cubeMatches={} nearestAny={}",
+            "Steve '{}' search diag: scanRadius={} visible={} visibleMatches={} cubeMatches={} nearestAny={} persona={} explorerFallbackUnlocked={}",
             steve.getSteveName(),
             scanRadius,
             visibleCount,
             visibleMatches,
             cubeMatches,
-            nearestAny
+            nearestAny,
+            persona,
+            explorerFallbackUnlocked
         );
     }
 
@@ -1133,7 +1727,7 @@ public class MineBlockAction extends BaseAction {
                     if (isUnsafeVerticalTarget(pos)) {
                         continue;
                     }
-                    if (!isWoodTask() && !isOreTask() && isNearBlockedTarget(pos, BLOCKED_CLUSTER_RADIUS)) {
+                    if (isNearBlockedTarget(pos, BLOCKED_CLUSTER_RADIUS)) {
                         continue;
                     }
                     double dist = origin.distSqr(pos);
@@ -1268,8 +1862,49 @@ public class MineBlockAction extends BaseAction {
             || targetBlockId.equals("minecraft:deepslate_iron_ore");
     }
 
+    private boolean allowDigThroughFallback() {
+        if (!shouldAllowSubsurfaceFallback()) {
+            return false;
+        }
+        return persona.prefersTunneling() || explorerFallbackUnlocked;
+    }
+
+    private int getNoTargetAbortTicks() {
+        if (persona.prefersCaveExploration() && isOreTask()) {
+            return EXPLORER_NO_TARGET_ABORT_TICKS;
+        }
+        return NO_TARGET_ABORT_TICKS;
+    }
+
+    private void maybeUnlockExplorerFallback() {
+        if (!persona.prefersCaveExploration() || explorerFallbackUnlocked || !isOreTask()) {
+            return;
+        }
+        // Coal search often needs earlier tunnel fallback to avoid endless cave-only loops.
+        if (isCoalTask() && ticksSinceLastMine >= 20 * 45) {
+            explorerFallbackUnlocked = true;
+            SteveMod.LOGGER.warn(
+                "Steve '{}' [explorer] unlocked dig-through fallback due prolonged coal no-mine window (ticksSinceLastMine={})",
+                steve.getSteveName(),
+                ticksSinceLastMine
+            );
+            return;
+        }
+        if (noTargetTicks < EXPLORER_FALLBACK_UNLOCK_TICKS) {
+            return;
+        }
+        explorerFallbackUnlocked = true;
+        SteveMod.LOGGER.warn(
+            "Steve '{}' [explorer] unlocked dig-through fallback after prolonged cave search (noTargetTicks={})",
+            steve.getSteveName(),
+            noTargetTicks
+        );
+    }
+
     private void assignActualTarget(BlockPos target) {
         actualTarget = target;
+        activeCaveCueTarget = null;
+        activeCaveCueStartTick = 0;
         obstructionQueue.clear();
         obstructionSet.clear();
         currentTarget = actualTarget;
@@ -1475,6 +2110,181 @@ public class MineBlockAction extends BaseAction {
         currentTarget = resolveCurrentTarget();
         targetRecoveryAttempts = 0;
         syncDebugTarget();
+    }
+
+    private boolean maybeRefreshLocalVisibleTarget(String phase) {
+        BlockPos candidate = findNearestVisibleTarget();
+        if (candidate == null) {
+            return false;
+        }
+        if (currentTarget == null) {
+            assignActualTarget(candidate);
+            clearStuckReason("local-visible-target-acquired");
+            SteveMod.LOGGER.info(
+                "[LOCAL_REEVAL] Steve '{}' acquired local visible target {} during {}",
+                steve.getSteveName(),
+                candidate,
+                phase
+            );
+            return true;
+        }
+        if (candidate.equals(currentTarget)) {
+            return false;
+        }
+
+        boolean currentVisible = isCurrentlyVisible(currentTarget);
+        boolean currentReachable = isLikelyReachableTarget(currentTarget);
+        double currentDistanceSqr = steve.distanceToSqr(
+            currentTarget.getX() + 0.5,
+            currentTarget.getY() + 0.5,
+            currentTarget.getZ() + 0.5
+        );
+        double candidateDistanceSqr = steve.distanceToSqr(
+            candidate.getX() + 0.5,
+            candidate.getY() + 0.5,
+            candidate.getZ() + 0.5
+        );
+
+        LocalReevaluationPolicy.Decision decision = localReevaluationPolicy.evaluate(
+            new LocalReevaluationPolicy.Context(
+                true,
+                true,
+                currentVisible,
+                currentReachable,
+                currentDistanceSqr,
+                candidateDistanceSqr,
+                targetStallTicks,
+                movementStuckTicks,
+                ticksRunning,
+                lastLocalRetargetTick
+            )
+        );
+        if (!decision.shouldSwitch()) {
+            return false;
+        }
+
+        BlockPos previous = currentTarget.immutable();
+        deferTarget(previous, LOCAL_TARGET_DEFER_TICKS, "local reevaluation replaced active target");
+        assignActualTarget(candidate);
+        lastLocalRetargetTick = ticksRunning;
+        targetStallTicks = 0;
+        lastTargetDistance = Double.MAX_VALUE;
+        miningProgressTicks = 0;
+        lastMiningTarget = null;
+        searchController.clearCommitment();
+        steve.getNavigation().moveTo(candidate.getX() + 0.5, candidate.getY(), candidate.getZ() + 0.5, 1.2);
+        noteStuckReason(
+            decision.reason(),
+            "switched target from " + previous + " to " + candidate + " during " + phase + " (" + decision.explanation() + ")"
+        );
+        SteveMod.LOGGER.info(
+            "[LOCAL_REEVAL] Steve '{}' switched target {} -> {} reason={} currentVisible={} currentReachable={} currentDist={} candidateDist={} phase={}",
+            steve.getSteveName(),
+            previous,
+            candidate,
+            decision.reason(),
+            currentVisible,
+            currentReachable,
+            String.format(java.util.Locale.ROOT, "%.2f", Math.sqrt(currentDistanceSqr)),
+            String.format(java.util.Locale.ROOT, "%.2f", Math.sqrt(candidateDistanceSqr)),
+            phase
+        );
+        return true;
+    }
+
+    private boolean isCurrentlyVisible(BlockPos pos) {
+        if (pos == null) {
+            return false;
+        }
+        for (VisibleBlockEntry entry : steve.getMemory().getVisibleBlocks()) {
+            if (pos.equals(entry.position())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isLikelyReachableTarget(BlockPos pos) {
+        if (pos == null || isBlockedTarget(pos)) {
+            return false;
+        }
+        if (shouldAllowSubsurfaceFallback()) {
+            return true;
+        }
+        String blockId = BuiltInRegistries.BLOCK.getKey(steve.level().getBlockState(pos).getBlock()).toString();
+        boolean woodLike = isWoodLikeBlockId(blockId);
+        if (woodLike) {
+            if (steve.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) <= 16.0) {
+                return true;
+            }
+            return canNavigateToAdjacentAirStrict(pos) || findApproachAnchor(pos) != null;
+        }
+        if (!hasExposedFace(pos)) {
+            return false;
+        }
+        return canNavigateToAdjacentAir(pos);
+    }
+
+    private void noteStuckReason(StuckReason reason, String detail) {
+        StuckReason normalized = reason == null ? StuckReason.NONE : reason;
+        if (!normalized.isStuck()) {
+            clearStuckReason(detail);
+            return;
+        }
+        boolean changed = normalized != currentStuckReason;
+        if (changed) {
+            currentStuckReason = normalized;
+            stuckReasonStartTick = ticksRunning;
+            lastStuckLogTick = Integer.MIN_VALUE / 4;
+        }
+        if (!changed && ticksRunning - lastStuckLogTick < STUCK_LOG_REPEAT_TICKS) {
+            return;
+        }
+        lastStuckLogTick = ticksRunning;
+        String goal = steve.getMemory().getCurrentGoal();
+        SteveMod.LOGGER.info(
+            "[STUCK] Steve '{}' reason={} durationTicks={} goal='{}' target={} detail={}",
+            steve.getSteveName(),
+            currentStuckReason,
+            Math.max(0, ticksRunning - stuckReasonStartTick),
+            goal == null ? "" : goal,
+            currentTarget,
+            detail == null ? "" : detail
+        );
+    }
+
+    private void clearStuckReason(String resolution) {
+        if (!currentStuckReason.isStuck()) {
+            return;
+        }
+        SteveMod.LOGGER.info(
+            "[STUCK] Steve '{}' cleared reason={} after {} ticks ({})",
+            steve.getSteveName(),
+            currentStuckReason,
+            Math.max(0, ticksRunning - stuckReasonStartTick),
+            resolution == null ? "" : resolution
+        );
+        currentStuckReason = StuckReason.NONE;
+        stuckReasonStartTick = ticksRunning;
+        lastStuckLogTick = Integer.MIN_VALUE / 4;
+    }
+
+    private void deferTarget(BlockPos pos, int ttlTicks, String reason) {
+        if (pos == null || ttlTicks <= 0) {
+            return;
+        }
+        int untilTick = ticksRunning + ttlTicks;
+        Integer existing = blockedTargets.get(pos);
+        if (existing == null || existing < untilTick) {
+            blockedTargets.put(pos.immutable(), untilTick);
+        }
+        SteveMod.LOGGER.info(
+            "[LOCAL_REEVAL] Steve '{}' deferred target {} for {} ticks ({})",
+            steve.getSteveName(),
+            pos,
+            ttlTicks,
+            reason
+        );
     }
 
     private void syncDebugTarget() {

@@ -9,14 +9,10 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.entity.player.PlayerEvent;
-import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
 
-@Mod.EventBusSubscriber(modid = SteveMod.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class ServerEventHandler {
     private static boolean stevesSpawned = false;
 
-    @SubscribeEvent
     public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
             ServerLevel level = (ServerLevel) player.level();
@@ -37,9 +33,9 @@ public class ServerEventHandler {
                 Vec3 playerPos = player.position();
                 Vec3 lookVec = player.getLookAngle();
 
-                String[] names = {"Steve", "Alex", "Bob", "Charlie"};
+                String[] names = {"Steve", "Alex"};
 
-                for (int i = 0; i < 4; i++) {
+                for (int i = 0; i < names.length; i++) {
                     double offsetX = lookVec.x * 5 + (lookVec.z * (i - 1.5) * 2);
                     double offsetZ = lookVec.z * 5 + (-lookVec.x * (i - 1.5) * 2);
 
@@ -60,7 +56,6 @@ public class ServerEventHandler {
         }
     }
 
-    @SubscribeEvent
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         stevesSpawned = false;
         DebugUiTracker.remove(event.getEntity().getUUID());

@@ -19,8 +19,10 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.entity.Relative;
 import net.minecraft.world.phys.Vec3;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import java.util.Set;
 
 public class SteveCommands {
     
@@ -34,9 +36,25 @@ public class SteveCommands {
                     .executes(SteveCommands::removeSteve)))
             .then(Commands.literal("list")
                 .executes(SteveCommands::listSteves))
+            .then(Commands.literal("tp")
+                .then(Commands.argument("name", StringArgumentType.string())
+                    .executes(SteveCommands::teleportToSteve)))
+            .then(Commands.literal("bring")
+                .then(Commands.argument("name", StringArgumentType.string())
+                    .executes(SteveCommands::bringSteveToPlayer)))
             .then(Commands.literal("stop")
                 .then(Commands.argument("name", StringArgumentType.string())
                     .executes(SteveCommands::stopSteve)))
+            .then(Commands.literal("behavior")
+                .then(Commands.argument("name", StringArgumentType.string())
+                    .then(Commands.literal("list")
+                        .executes(SteveCommands::behaviorList))
+                    .then(Commands.literal("enable")
+                        .then(Commands.argument("id", StringArgumentType.string())
+                            .executes(SteveCommands::behaviorEnable)))
+                    .then(Commands.literal("disable")
+                        .then(Commands.argument("id", StringArgumentType.string())
+                            .executes(SteveCommands::behaviorDisable)))))
             .then(Commands.literal("inventory")
                 .then(Commands.argument("name", StringArgumentType.string())
                     .executes(SteveCommands::inventorySteve)))
@@ -136,11 +154,20 @@ public class SteveCommands {
         CommandSourceStack source = context.getSource();
         SteveManager manager = SteveMod.getSteveManager();
         
-        var names = manager.getSteveNames();
-        if (names.isEmpty()) {
+        var steves = manager.getAllSteves();
+        if (steves.isEmpty()) {
             source.sendSuccess(() -> Component.literal("No active Steves"), false);
         } else {
-            source.sendSuccess(() -> Component.literal("Active Steves (" + names.size() + "): " + String.join(", ", names)), false);
+            String details = steves.stream()
+                .map(steve -> steve.getSteveName()
+                    + "@"
+                    + (int) steve.getX() + ","
+                    + (int) steve.getY() + ","
+                    + (int) steve.getZ()
+                    + " persona=" + steve.getPersona().name().toLowerCase(java.util.Locale.ROOT))
+                .reduce((a, b) -> a + " | " + b)
+                .orElse("");
+            source.sendSuccess(() -> Component.literal("Active Steves (" + steves.size() + "): " + details), false);
         }
         return 1;
     }
@@ -161,6 +188,68 @@ public class SteveCommands {
             source.sendFailure(Component.literal("Steve not found: " + name));
             return 0;
         }
+    }
+
+    private static int teleportToSteve(CommandContext<CommandSourceStack> context) {
+        String name = StringArgumentType.getString(context, "name");
+        CommandSourceStack source = context.getSource();
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Command must be run by a player"));
+            return 0;
+        }
+
+        SteveEntity steve = SteveMod.getSteveManager().getSteve(name);
+        if (steve == null || !(steve.level() instanceof ServerLevel steveLevel)) {
+            source.sendFailure(Component.literal("Steve not found: " + name));
+            return 0;
+        }
+
+        boolean success = player.teleportTo(
+            steveLevel,
+            steve.getX(),
+            steve.getY(),
+            steve.getZ(),
+            Set.of(),
+            player.getYRot(),
+            player.getXRot(),
+            true
+        );
+        if (!success) {
+            source.sendFailure(Component.literal("Failed to teleport to Steve: " + name));
+            return 0;
+        }
+
+        source.sendSuccess(() -> Component.literal(
+            "Teleported to " + steve.getSteveName()
+                + " at " + (int) steve.getX() + ", " + (int) steve.getY() + ", " + (int) steve.getZ()
+        ), false);
+        return 1;
+    }
+
+    private static int bringSteveToPlayer(CommandContext<CommandSourceStack> context) {
+        String name = StringArgumentType.getString(context, "name");
+        CommandSourceStack source = context.getSource();
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Command must be run by a player"));
+            return 0;
+        }
+
+        SteveEntity steve = SteveMod.getSteveManager().getSteve(name);
+        if (steve == null) {
+            source.sendFailure(Component.literal("Steve not found: " + name));
+            return 0;
+        }
+
+        Vec3 bringPos = player.position().add(1.5, 0.0, 1.5);
+        steve.teleportTo(bringPos.x, bringPos.y, bringPos.z);
+        steve.getNavigation().stop();
+        source.sendSuccess(() -> Component.literal(
+            "Brought " + steve.getSteveName()
+                + " to " + (int) bringPos.x + ", " + (int) bringPos.y + ", " + (int) bringPos.z
+        ), false);
+        return 1;
     }
 
     private static int tellSteve(CommandContext<CommandSourceStack> context) {
@@ -202,6 +291,63 @@ public class SteveCommands {
             source.sendFailure(Component.literal("Steve not found: " + name));
             return 0;
         }
+    }
+
+    private static int behaviorList(CommandContext<CommandSourceStack> context) {
+        SteveEntity steve = getSteveByName(context);
+        if (steve == null) {
+            return 0;
+        }
+        var statuses = steve.getActionExecutor().getBehaviorStatuses();
+        if (statuses.isEmpty()) {
+            context.getSource().sendSuccess(() -> Component.literal(
+                "No behaviors registered for " + steve.getSteveName()
+            ), false);
+            return 1;
+        }
+        String line = statuses.stream()
+            .map(s -> (s.enabled() ? "[ON] " : "[OFF] ")
+                + s.id()
+                + " lane=" + s.lane()
+                + " lp=" + s.lanePriority()
+                + " p=" + s.priority()
+                + " cd=" + s.cooldownTicks()
+                + " cost=" + s.budgetCost())
+            .reduce((a, b) -> a + " | " + b)
+            .orElse("");
+        context.getSource().sendSuccess(() -> Component.literal(
+            "Behaviors for " + steve.getSteveName() + ": " + line
+        ), false);
+        return 1;
+    }
+
+    private static int behaviorEnable(CommandContext<CommandSourceStack> context) {
+        return setBehaviorState(context, true);
+    }
+
+    private static int behaviorDisable(CommandContext<CommandSourceStack> context) {
+        return setBehaviorState(context, false);
+    }
+
+    private static int setBehaviorState(CommandContext<CommandSourceStack> context, boolean enabled) {
+        SteveEntity steve = getSteveByName(context);
+        if (steve == null) {
+            return 0;
+        }
+        String id = StringArgumentType.getString(context, "id");
+        boolean ok = steve.getActionExecutor().setBehaviorEnabled(id, enabled);
+        if (!ok) {
+            String known = String.join(", ", steve.getActionExecutor().getKnownBehaviorIds());
+            context.getSource().sendFailure(Component.literal(
+                "Unknown behavior id '" + id + "' for " + steve.getSteveName()
+                    + ". Known: " + (known.isBlank() ? "none" : known)
+            ));
+            return 0;
+        }
+        context.getSource().sendSuccess(() -> Component.literal(
+            (enabled ? "Enabled " : "Disabled ") + "behavior '" + id + "' for " + steve.getSteveName()
+        ), true);
+        return 1;
     }
 
     private static int giveFromSteve(CommandContext<CommandSourceStack> context, int count) {

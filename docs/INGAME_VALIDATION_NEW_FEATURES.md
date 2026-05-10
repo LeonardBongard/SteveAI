@@ -285,6 +285,24 @@ Expected:
 2. When queue becomes empty unexpectedly, Steve resumes pending/failed task-tree nodes automatically.
 3. Logs include `[GOAL] ... resumed task ...` when recovery path is used.
 
+## Scenario 24: Dynamic behavior lanes (enable/disable runtime)
+Setup:
+1. Spawn Steve and ensure command perms.
+2. Start a long-running task.
+
+Commands:
+- `/steve behavior Alex list`
+- `/steve behavior Alex disable passive_visible_scan`
+- `/steve behavior Alex list`
+- `/steve behavior Alex enable passive_visible_scan`
+- `/steve behavior Alex list`
+
+Expected:
+1. Behavior list shows lane/priority/cooldown/cost and ON/OFF state per module.
+2. Disabling `passive_visible_scan` sets it OFF without stopping current foreground task.
+3. Re-enabling returns it to ON and visible memory refresh resumes in subsequent ticks.
+4. Unknown IDs fail explicitly and print known behavior IDs.
+
 ## Pass Criteria
 1. No infinite loops in logs.
 2. Explicit reasons for failed actions.
@@ -294,3 +312,4 @@ Expected:
 6. Water traversal emits `[SWIM]` logs for segment transitions and recovery branches.
 7. Crafting and execution legality checks block illegal actions (`[LEGALITY]`) and station-locked recipes require correct block usage.
 8. Scenario 20 (`craft iron_pickaxe`) is run as a default regression check for crafting pipeline changes.
+9. Scenario 24 confirms runtime modular behavior control works per Steve instance.

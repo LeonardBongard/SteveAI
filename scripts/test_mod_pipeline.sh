@@ -33,6 +33,27 @@ fi
 
 "${PROJECT_ROOT}/gradlew" "${GRADLE_ARGS[@]}"
 
+# Hard gate: relevant scheduler regression tests must exist and pass on every pipeline run.
+TEST_RESULTS_DIR="${PROJECT_ROOT}/build/test-results/test"
+SCHEDULER_TEST_XML="${TEST_RESULTS_DIR}/TEST-com.steve.ai.execution.behavior.BehaviorSchedulerTest.xml"
+REGISTRY_TEST_XML="${TEST_RESULTS_DIR}/TEST-com.steve.ai.execution.behavior.BehaviorRegistryTest.xml"
+
+for xml in "${SCHEDULER_TEST_XML}" "${REGISTRY_TEST_XML}"; do
+  if [[ ! -f "${xml}" ]]; then
+    echo "Required regression result missing: ${xml}"
+    echo "Aborting jar installation."
+    exit 1
+  fi
+  if grep -q 'failures="0"' "${xml}" && grep -q 'errors="0"' "${xml}"; then
+    :
+  else
+    echo "Required regression test failed: ${xml}"
+    echo "Aborting jar installation."
+    exit 1
+  fi
+done
+echo "Verified required behavior scheduler regression tests."
+
 # Install mod
 MC_DIR="${HOME}/Library/Application Support/minecraft"
 MODS_DIR="${HOME}/Library/Application Support/minecraft/mods"

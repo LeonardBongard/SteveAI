@@ -6,6 +6,7 @@ Current runtime flow:
 2. LLM planning -> `TaskPlanner`
 3. Parsed tasks -> `Task`
 4. Tick execution -> `BaseAction` subclasses
+5. Always-on passive scheduler -> lane-based `BehaviorScheduler`
 
 This is a good base and should be extended, not replaced.
 
@@ -35,6 +36,23 @@ Use explicit domain services to keep `BaseAction` focused on execution:
 6. `ActionContracts`
 - Typed parameter schema per action.
 - Validation before queue insertion.
+
+7. `BehaviorScheduler` (dynamic lanes, modular passive execution)
+- Foreground action execution and passive world-learning run in the same tick loop.
+- Behaviors are modules (`BehaviorDefinition`) with:
+  - `id`, `lane`, `lanePriority`, `priority`
+  - `cooldownTicks`, `budgetCost`
+  - `shouldRun(context)`, `run(context)`
+- Scheduler order:
+  1. Sort by lanePriority -> lane -> priority -> id.
+  2. Enforce tick budget.
+  3. Skip on cooldown.
+  4. Isolate failures per behavior (one failure must not stop others).
+
+Current default passive behaviors:
+1. `passive_safety_pulse` (critical lane)
+2. `passive_visible_scan` (background observe lane)
+3. `passive_chest_scan` (background knowledge lane)
 
 ## Safety Evaluator Contract
 `SafetyEvaluatorManager` inputs:

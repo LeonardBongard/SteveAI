@@ -36,11 +36,8 @@ public final class SteveDebugTargetRenderer {
             return;
         }
 
-        List<SteveEntity> steves = mc.level.getEntitiesOfClass(
-            SteveEntity.class,
-            mc.player.getBoundingBox().inflate(128.0)
-        );
-        if (steves.isEmpty()) {
+        SteveEntity selectedSteve = SteveDebugBlocksData.getSelectedSteve(mc, 128.0);
+        if (selectedSteve == null) {
             return;
         }
 
@@ -61,29 +58,27 @@ public final class SteveDebugTargetRenderer {
             BlockPos lookedPos = event.getTarget().getBlockPos();
             drawBlockOutline(source.getBuffer(RenderTypes.lines()), poseStack.last(), lookedPos, camX, camY, camZ, lookedColor, 1.25F);
 
-            for (SteveEntity steve : steves) {
-                for (BlockPos remembered : parseRememberedPositions(steve.getMemoryBlockPositionsSynced())) {
-                    if (!shouldRenderMemoryAt(mc, remembered)) {
-                        continue;
-                    }
-                    drawBlockOutlineSized(source.getBuffer(RenderTypes.lines()), poseStack.last(), remembered, camX, camY, camZ, memoryColor, 1.55F, MEMORY_MARKER_SIZE * markerScale);
-                }
-                for (BlockPos episodicRemembered : parseRememberedPositions(steve.getMemoryEpisodicPositionsSynced())) {
-                    if (!shouldRenderMemoryAt(mc, episodicRemembered)) {
-                        continue;
-                    }
-                    drawBlockOutlineSized(source.getBuffer(RenderTypes.lines()), poseStack.last(), episodicRemembered, camX, camY, camZ, episodicMemoryColor, 1.4F, 2.0F * markerScale);
-                }
-                for (BlockPos chestRemembered : parseRememberedPositions(steve.getMemoryChestPositionsSynced())) {
-                    if (!shouldRenderMemoryAt(mc, chestRemembered)) {
-                        continue;
-                    }
-                    drawBlockOutlineSized(source.getBuffer(RenderTypes.lines()), poseStack.last(), chestRemembered, camX, camY, camZ, chestMemoryColor, 1.85F, CHEST_MEMORY_MARKER_SIZE * markerScale);
-                }
-                BlockPos target = steve.getDebugTargetBlock();
-                if (target == null) {
+            SteveEntity steve = selectedSteve;
+            for (BlockPos remembered : parseRememberedPositions(steve.getMemoryBlockPositionsSynced())) {
+                if (!shouldRenderMemoryAt(mc, remembered)) {
                     continue;
                 }
+                drawBlockOutlineSized(source.getBuffer(RenderTypes.lines()), poseStack.last(), remembered, camX, camY, camZ, memoryColor, 1.55F, MEMORY_MARKER_SIZE * markerScale);
+            }
+            for (BlockPos episodicRemembered : parseRememberedPositions(steve.getMemoryEpisodicPositionsSynced())) {
+                if (!shouldRenderMemoryAt(mc, episodicRemembered)) {
+                    continue;
+                }
+                drawBlockOutlineSized(source.getBuffer(RenderTypes.lines()), poseStack.last(), episodicRemembered, camX, camY, camZ, episodicMemoryColor, 1.4F, 2.0F * markerScale);
+            }
+            for (BlockPos chestRemembered : parseRememberedPositions(steve.getMemoryChestPositionsSynced())) {
+                if (!shouldRenderMemoryAt(mc, chestRemembered)) {
+                    continue;
+                }
+                drawBlockOutlineSized(source.getBuffer(RenderTypes.lines()), poseStack.last(), chestRemembered, camX, camY, camZ, chestMemoryColor, 1.85F, CHEST_MEMORY_MARKER_SIZE * markerScale);
+            }
+            BlockPos target = steve.getDebugTargetBlock();
+            if (target != null) {
                 drawBlockOutline(source.getBuffer(RenderTypes.lines()), poseStack.last(), target, camX, camY, camZ, steveColor, 2.5F);
             }
         });
@@ -100,11 +95,8 @@ public final class SteveDebugTargetRenderer {
         if (mc.level == null || mc.player == null) {
             return;
         }
-        List<SteveEntity> steves = mc.level.getEntitiesOfClass(
-            SteveEntity.class,
-            mc.player.getBoundingBox().inflate(128.0)
-        );
-        if (steves.isEmpty()) {
+        SteveEntity selectedSteve = SteveDebugBlocksData.getSelectedSteve(mc, 128.0);
+        if (selectedSteve == null) {
             return;
         }
         final double camX = event.getCameraState().pos.x;
@@ -121,29 +113,27 @@ public final class SteveDebugTargetRenderer {
             poseStack,
             RenderTypes.lines(),
             (pose, consumer) -> {
-                for (SteveEntity steve : steves) {
-                    for (BlockPos remembered : parseRememberedPositions(steve.getMemoryBlockPositionsSynced())) {
-                        if (!shouldRenderMemoryAt(mc, remembered)) {
-                            continue;
-                        }
-                        drawBlockOutlineSized(consumer, pose, remembered, camX, camY, camZ, memoryColor, 1.45F, MEMORY_MARKER_SIZE * markerScale);
-                    }
-                    for (BlockPos episodicRemembered : parseRememberedPositions(steve.getMemoryEpisodicPositionsSynced())) {
-                        if (!shouldRenderMemoryAt(mc, episodicRemembered)) {
-                            continue;
-                        }
-                        drawBlockOutlineSized(consumer, pose, episodicRemembered, camX, camY, camZ, episodicMemoryColor, 1.35F, 2.0F * markerScale);
-                    }
-                    for (BlockPos chestRemembered : parseRememberedPositions(steve.getMemoryChestPositionsSynced())) {
-                        if (!shouldRenderMemoryAt(mc, chestRemembered)) {
-                            continue;
-                        }
-                        drawBlockOutlineSized(consumer, pose, chestRemembered, camX, camY, camZ, chestMemoryColor, 1.75F, CHEST_MEMORY_MARKER_SIZE * markerScale);
-                    }
-                    BlockPos target = steve.getDebugTargetBlock();
-                    if (target == null) {
+                SteveEntity steve = selectedSteve;
+                for (BlockPos remembered : parseRememberedPositions(steve.getMemoryBlockPositionsSynced())) {
+                    if (!shouldRenderMemoryAt(mc, remembered)) {
                         continue;
                     }
+                    drawBlockOutlineSized(consumer, pose, remembered, camX, camY, camZ, memoryColor, 1.45F, MEMORY_MARKER_SIZE * markerScale);
+                }
+                for (BlockPos episodicRemembered : parseRememberedPositions(steve.getMemoryEpisodicPositionsSynced())) {
+                    if (!shouldRenderMemoryAt(mc, episodicRemembered)) {
+                        continue;
+                    }
+                    drawBlockOutlineSized(consumer, pose, episodicRemembered, camX, camY, camZ, episodicMemoryColor, 1.35F, 2.0F * markerScale);
+                }
+                for (BlockPos chestRemembered : parseRememberedPositions(steve.getMemoryChestPositionsSynced())) {
+                    if (!shouldRenderMemoryAt(mc, chestRemembered)) {
+                        continue;
+                    }
+                    drawBlockOutlineSized(consumer, pose, chestRemembered, camX, camY, camZ, chestMemoryColor, 1.75F, CHEST_MEMORY_MARKER_SIZE * markerScale);
+                }
+                BlockPos target = steve.getDebugTargetBlock();
+                if (target != null) {
                     drawBlockOutline(consumer, pose, target, camX, camY, camZ, steveColor, 2.25F);
                 }
             }
@@ -162,19 +152,13 @@ public final class SteveDebugTargetRenderer {
         if (particleTick % 6 != 0) {
             return;
         }
-        List<SteveEntity> steves = mc.level.getEntitiesOfClass(
-            SteveEntity.class,
-            mc.player.getBoundingBox().inflate(128.0)
-        );
-        if (steves.isEmpty()) {
+        SteveEntity selectedSteve = SteveDebugBlocksData.getSelectedSteve(mc, 128.0);
+        if (selectedSteve == null) {
             return;
         }
         DustParticleOptions marker = new DustParticleOptions(0x26D9FF, 1.0F);
-        for (SteveEntity steve : steves) {
-            BlockPos target = steve.getDebugTargetBlock();
-            if (target == null) {
-                continue;
-            }
+        BlockPos target = selectedSteve.getDebugTargetBlock();
+        if (target != null) {
             spawnCornerParticle(mc, marker, target.getX() + 0.05, target.getY() + 0.05, target.getZ() + 0.05);
             spawnCornerParticle(mc, marker, target.getX() + 0.95, target.getY() + 0.05, target.getZ() + 0.05);
             spawnCornerParticle(mc, marker, target.getX() + 0.05, target.getY() + 0.05, target.getZ() + 0.95);

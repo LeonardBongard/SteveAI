@@ -32,10 +32,12 @@ public class SteveMemory {
     private final Map<Long, Map<String, EpisodicObservation>> episodicByChunk;
     private final Map<String, SemanticStat> semanticStats;
     private final Map<String, Set<Long>> semanticSeenChunks;
+    private final Set<Long> exploredCaveChunks;
     private static final int MAX_RECENT_ACTIONS = 20;
     private static final int MAX_VIEW_SAMPLES = 160;
     private static final int MAX_EPISODIC_CHUNKS = 256;
     private static final int MAX_EPISODIC_PER_CHUNK = 20;
+    private static final int MAX_EXPLORED_CAVE_CHUNKS = 1024;
     private static final String[] YAW_LABELS = {"S", "SW", "W", "NW", "N", "NE", "E", "SE"};
     private static final String[] PITCH_LABELS = {"Up", "Level", "Down"};
 
@@ -51,6 +53,7 @@ public class SteveMemory {
         this.episodicByChunk = new LinkedHashMap<>();
         this.semanticStats = new HashMap<>();
         this.semanticSeenChunks = new HashMap<>();
+        this.exploredCaveChunks = new java.util.LinkedHashSet<>();
     }
 
     public String getCurrentGoal() {
@@ -261,6 +264,51 @@ public class SteveMemory {
         return total;
     }
 
+    public int getEpisodicObservationCountForChunk(BlockPos pos) {
+        if (pos == null) {
+            return 0;
+        }
+        Map<String, EpisodicObservation> chunk = episodicByChunk.get(chunkKey(pos));
+        return chunk == null ? 0 : chunk.size();
+    }
+
+    /**
+     * Returns a normalized "exploration need" score for the target region.
+     * Higher means less observed / more unknown, so explorer should prioritize it.
+     */
+    public double getExplorationNeedScore(BlockPos pos, int chunkRadius) {
+        if (pos == null || chunkRadius < 0) {
+            return 0.0;
+        }
+        int centerChunkX = pos.getX() >> 4;
+        int centerChunkZ = pos.getZ() >> 4;
+        int samples = 0;
+        int totalObservations = 0;
+        int emptyChunks = 0;
+
+        for (int dx = -chunkRadius; dx <= chunkRadius; dx++) {
+            for (int dz = -chunkRadius; dz <= chunkRadius; dz++) {
+                samples++;
+                long key = chunkKey(centerChunkX + dx, centerChunkZ + dz);
+                Map<String, EpisodicObservation> chunk = episodicByChunk.get(key);
+                if (chunk == null || chunk.isEmpty()) {
+                    emptyChunks++;
+                    continue;
+                }
+                totalObservations += chunk.size();
+            }
+        }
+
+        if (samples <= 0) {
+            return 0.0;
+        }
+
+        double avgObservations = (double) totalObservations / samples;
+        double emptinessRatio = (double) emptyChunks / samples;
+        // Higher emptiness and lower average observations => higher need.
+        return emptinessRatio * 0.7 + Math.max(0.0, (12.0 - avgObservations) / 12.0) * 0.3;
+    }
+
     public String getSemanticSummary(int maxItems) {
         if (semanticStats.isEmpty()) {
             return "No semantic memory";
@@ -286,6 +334,29 @@ public class SteveMemory {
             sb.append(" ...");
         }
         return sb.toString();
+    }
+
+    public void markCaveChunkExplored(BlockPos pos) {
+        if (pos == null) {
+            return;
+        }
+        exploredCaveChunks.add(chunkKey(pos));
+        trimExploredCaveChunks();
+    }
+
+    public boolean isCaveChunkExplored(BlockPos pos) {
+        if (pos == null) {
+            return false;
+        }
+        return exploredCaveChunks.contains(chunkKey(pos));
+    }
+
+    public int getExploredCaveChunkCount() {
+        return exploredCaveChunks.size();
+    }
+
+    public void clearExploredCaveChunks() {
+        exploredCaveChunks.clear();
     }
 
     public List<VisibleBlock> getVisibleBlocksSnapshot() {
@@ -454,6 +525,19 @@ public class SteveMemory {
         }
     }
 
+    private void trimExploredCaveChunks() {
+        if (exploredCaveChunks.size() <= MAX_EXPLORED_CAVE_CHUNKS) {
+            return;
+        }
+        int remove = exploredCaveChunks.size() - MAX_EXPLORED_CAVE_CHUNKS;
+        java.util.Iterator<Long> iterator = exploredCaveChunks.iterator();
+        while (remove > 0 && iterator.hasNext()) {
+            iterator.next();
+            iterator.remove();
+            remove--;
+        }
+    }
+
     private long newestTickInChunk(Map<String, EpisodicObservation> chunk) {
         long newest = Long.MIN_VALUE;
         for (EpisodicObservation obs : chunk.values()) {
@@ -476,6 +560,12 @@ public class SteveMemory {
     private long chunkKey(BlockPos pos) {
         long x = pos.getX() >> 4;
         long z = pos.getZ() >> 4;
+        return (x & 0xffffffffL) << 32 | (z & 0xffffffffL);
+    }
+
+    private long chunkKey(int chunkX, int chunkZ) {
+        long x = chunkX;
+        long z = chunkZ;
         return (x & 0xffffffffL) << 32 | (z & 0xffffffffL);
     }
 

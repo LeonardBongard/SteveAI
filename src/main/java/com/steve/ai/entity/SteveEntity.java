@@ -1,6 +1,8 @@
 package com.steve.ai.entity;
 
 import com.steve.ai.action.ActionExecutor;
+import com.steve.ai.config.StevePersona;
+import com.steve.ai.config.StevePersonaProfiles;
 import com.steve.ai.config.SteveRuntimeSettings;
 import com.steve.ai.food.FoodTargetResolver;
 import com.steve.ai.memory.SteveMemory;
@@ -72,12 +74,17 @@ public class SteveEntity extends PathfinderMob {
         SynchedEntityData.defineId(SteveEntity.class, EntityDataSerializers.STRING);
     private static final EntityDataAccessor<String> MEMORY_SEMANTIC_SUMMARY =
         SynchedEntityData.defineId(SteveEntity.class, EntityDataSerializers.STRING);
+    private static final EntityDataAccessor<String> PLAYTEST_STATE =
+        SynchedEntityData.defineId(SteveEntity.class, EntityDataSerializers.STRING);
+    private static final EntityDataAccessor<String> PLAYTEST_INFO =
+        SynchedEntityData.defineId(SteveEntity.class, EntityDataSerializers.STRING);
+    private static final EntityDataAccessor<String> TASK_STATUS_SUMMARY =
+        SynchedEntityData.defineId(SteveEntity.class, EntityDataSerializers.STRING);
 
     private String steveName;
     private SteveMemory memory;
     private ActionExecutor actionExecutor;
     private int tickCounter = 0;
-    private static final int VISIBLE_BLOCK_SCAN_INTERVAL = 20;
     private int lastVisibleScanTick = -1;
     private boolean isFlying = false;
     private boolean isInvulnerable = false;
@@ -135,6 +142,9 @@ public class SteveEntity extends PathfinderMob {
         builder.define(MEMORY_CHEST_POSITIONS, "");
         builder.define(MEMORY_EPISODIC_POSITIONS, "");
         builder.define(MEMORY_SEMANTIC_SUMMARY, "No semantic memory");
+        builder.define(PLAYTEST_STATE, "NONE");
+        builder.define(PLAYTEST_INFO, "");
+        builder.define(TASK_STATUS_SUMMARY, "No active tasks");
     }
 
     @Override
@@ -146,11 +156,9 @@ public class SteveEntity extends PathfinderMob {
             applyMovementExhaustion();
             foodData.tick(this);
             actionExecutor.tick();
+            updateTaskStatusSummary();
             pickupNearbyItems();
             tickCounter++;
-            if (tickCounter % VISIBLE_BLOCK_SCAN_INTERVAL == 0 && this.level() instanceof ServerLevel serverLevel) {
-                updateVisibleBlocks(serverLevel, SteveRuntimeSettings.getVisibleScanRadius());
-            }
         }
 
         lastTickX = this.getX();
@@ -174,6 +182,10 @@ public class SteveEntity extends PathfinderMob {
 
     public ActionExecutor getActionExecutor() {
         return this.actionExecutor;
+    }
+
+    public StevePersona getPersona() {
+        return StevePersonaProfiles.forSteveName(getSteveName());
     }
 
     public int getVisibleBlocksCount() {
@@ -981,11 +993,56 @@ public class SteveEntity extends PathfinderMob {
         return this.entityData.get(MEMORY_SEMANTIC_SUMMARY);
     }
 
+    public void setPlaytestStatus(String state, String info) {
+        if (this.level().isClientSide()) {
+            return;
+        }
+        String safeState = state == null ? "NONE" : state.trim().toUpperCase(Locale.ROOT);
+        if (safeState.isBlank()) {
+            safeState = "NONE";
+        }
+        String safeInfo = info == null ? "" : info.trim();
+        if (safeInfo.length() > 160) {
+            safeInfo = safeInfo.substring(0, 157) + "...";
+        }
+        this.entityData.set(PLAYTEST_STATE, safeState);
+        this.entityData.set(PLAYTEST_INFO, safeInfo);
+    }
+
+    public String getPlaytestStateSynced() {
+        String state = this.entityData.get(PLAYTEST_STATE);
+        return state == null || state.isBlank() ? "NONE" : state;
+    }
+
+    public String getPlaytestInfoSynced() {
+        String info = this.entityData.get(PLAYTEST_INFO);
+        return info == null ? "" : info;
+    }
+
+    public String getTaskStatusSummarySynced() {
+        String raw = this.entityData.get(TASK_STATUS_SUMMARY);
+        return raw == null || raw.isBlank() ? "No active tasks" : raw;
+    }
+
     private void updateInventorySummary() {
         if (this.level().isClientSide()) {
             return;
         }
         this.entityData.set(INVENTORY_SUMMARY, getInventorySummary());
+    }
+
+    private void updateTaskStatusSummary() {
+        if (this.level().isClientSide()) {
+            return;
+        }
+        String summary = actionExecutor != null ? actionExecutor.getTaskStatusSummaryForUi() : "No active tasks";
+        if (summary == null || summary.isBlank()) {
+            summary = "No active tasks";
+        }
+        if (summary.length() > 1200) {
+            summary = summary.substring(0, 1197) + "...";
+        }
+        this.entityData.set(TASK_STATUS_SUMMARY, summary);
     }
 
     private void updateMemoryDebugSummary() {

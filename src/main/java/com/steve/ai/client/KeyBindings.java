@@ -16,6 +16,7 @@ public class KeyBindings {
     public static KeyMapping TOGGLE_STEVE_INVENTORY;
     public static KeyMapping TOGGLE_STEVE_MEMORY;
     public static KeyMapping OPEN_STEVE_SETTINGS;
+    public static KeyMapping CYCLE_DEBUG_STEVE;
 
     public static void registerKeys(RegisterKeyMappingsEvent event) {
         TOGGLE_GUI = new KeyMapping(
@@ -62,5 +63,14 @@ public class KeyBindings {
         );
 
         event.register(OPEN_STEVE_SETTINGS);
+
+        CYCLE_DEBUG_STEVE = new KeyMapping(
+            "key.steve.cycle_debug_steve",
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_U, // U key
+            KEY_CATEGORY
+        );
+
+        event.register(CYCLE_DEBUG_STEVE);
     }
 }

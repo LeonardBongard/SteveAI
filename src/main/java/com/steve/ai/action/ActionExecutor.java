@@ -9,6 +9,13 @@ import com.steve.ai.di.SimpleServiceContainer;
 import com.steve.ai.event.EventBus;
 import com.steve.ai.event.SimpleEventBus;
 import com.steve.ai.execution.*;
+import com.steve.ai.execution.behavior.BehaviorContext;
+import com.steve.ai.execution.behavior.BehaviorDefinition;
+import com.steve.ai.execution.behavior.BehaviorRegistry;
+import com.steve.ai.execution.behavior.BehaviorScheduler;
+import com.steve.ai.execution.behavior.impl.PassiveChestScanBehavior;
+import com.steve.ai.execution.behavior.impl.PassiveSafetyPulseBehavior;
+import com.steve.ai.execution.behavior.impl.PassiveVisibleScanBehavior;
 import com.steve.ai.llm.ResponseParser;
 import com.steve.ai.llm.TaskPlanner;
 import com.steve.ai.config.SteveConfig;
@@ -32,7 +39,9 @@ import java.util.LinkedList;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -71,6 +80,10 @@ public class ActionExecutor {
     private final AgentStateMachine stateMachine;
     private final EventBus eventBus;
     private final SafetyEvaluatorManager safetyEvaluatorManager;
+    private final BehaviorRegistry behaviorRegistry;
+    private final BehaviorScheduler behaviorScheduler;
+    private final Map<String, BehaviorDefinition> knownBehaviors;
+    private final java.util.Set<String> disabledBehaviors;
     private String lastDebugStatus;
     private UUID lastCommandingPlayerId;
     private int safetyActionCooldownTicks;
@@ -98,6 +111,7 @@ public class ActionExecutor {
     private static final String META_TOOL_RECOVERY_RETRY = "__tool_recovery_retry";
     private static final String META_NODE_ID = "__task_node_id";
     private static final String META_PARENT_ID = "__task_parent_id";
+    private static final int PASSIVE_BEHAVIOR_TICK_BUDGET = 8;
     private final List<TaskExpansionRule> expansionRules;
 
     public ActionExecutor(SteveEntity steve) {
@@ -132,6 +146,10 @@ public class ActionExecutor {
         this.stateMachine = new AgentStateMachine(eventBus, steve.getSteveName());
         this.interceptorChain = new InterceptorChain();
         this.safetyEvaluatorManager = new DefaultSafetyEvaluatorManager();
+        this.behaviorRegistry = new BehaviorRegistry();
+        this.behaviorScheduler = new BehaviorScheduler(behaviorRegistry);
+        this.knownBehaviors = new LinkedHashMap<>();
+        this.disabledBehaviors = new LinkedHashSet<>();
 
         // Setup interceptors
         interceptorChain.addInterceptor(new LoggingInterceptor());
@@ -150,6 +168,7 @@ public class ActionExecutor {
 
         SteveMod.LOGGER.debug("ActionExecutor initialized with plugin architecture for Steve '{}'",
             steve.getSteveName());
+        registerDefaultBehaviors();
         updateDebugStatus("Idle");
     }
     
@@ -327,6 +346,7 @@ public class ActionExecutor {
         if (chestScanCooldownTicks > 0) {
             chestScanCooldownTicks--;
         }
+        runPassiveBehaviors();
 
         // Check if async planning is complete (non-blocking check!)
         if (isPlanning && planningFuture != null && planningFuture.isDone()) {
@@ -369,15 +389,16 @@ public class ActionExecutor {
             }
         }
 
-        if (currentAction != null) {
-            if (currentAction.isComplete()) {
-                ActionResult result = currentAction.getResult();
-                Task completedTask = currentAction.getTask();
+        BaseAction action = currentAction;
+        if (action != null) {
+            if (action.isComplete()) {
+                ActionResult result = action.getResult();
+                Task completedTask = action.getTask();
                 String completedNodeId = nodeIdOf(completedTask);
                 SteveMod.LOGGER.info("Steve '{}' - Action completed: {} (Success: {})", 
                     steve.getSteveName(), result.getMessage(), result.isSuccess());
                 
-                steve.getMemory().addAction(currentAction.getDescription());
+                steve.getMemory().addAction(action.getDescription());
                 markTaskNodeFinished(completedNodeId, result.isSuccess());
                 recordTaskOutcome(completedTask, result.isSuccess());
                 if (!result.isSuccess()) {
@@ -405,10 +426,12 @@ public class ActionExecutor {
             } else {
                 if (ticksSinceLastAction % 100 == 0) {
                     SteveMod.LOGGER.info("Steve '{}' - Ticking action: {}", 
-                        steve.getSteveName(), currentAction.getDescription());
+                        steve.getSteveName(), action.getDescription());
                 }
-                currentAction.tick();
-                updateDebugStatus("Action: " + currentAction.getDescription());
+                action.tick();
+                // Tick can complete/cancel action and clear currentAction in the same server tick.
+                BaseAction stillActive = currentAction;
+                updateDebugStatus("Action: " + (stillActive != null ? stillActive.getDescription() : action.getDescription()));
                 return;
             }
         }
@@ -491,9 +514,9 @@ public class ActionExecutor {
         }
         updateDebugStatus("Action: " + task.getAction() + " " + task.getParameters());
         
-        currentAction = createAction(task);
-        
-        if (currentAction == null) {
+        BaseAction createdAction = createAction(task);
+
+        if (createdAction == null) {
             String nodeId = nodeIdOf(task);
             SteveMod.LOGGER.error("FAILED to create action for task: {}", task);
             sendToGUI(steve.getSteveName(), "I could not execute task: " + task.getAction());
@@ -502,9 +525,19 @@ public class ActionExecutor {
             return;
         }
 
-        SteveMod.LOGGER.info("Created action: {} - starting now...", currentAction.getClass().getSimpleName());
-        currentAction.start();
-        SteveMod.LOGGER.info("Action started! Is complete: {}", currentAction.isComplete());
+        currentAction = createdAction;
+        SteveMod.LOGGER.info("Created action: {} - starting now...", createdAction.getClass().getSimpleName());
+        createdAction.start();
+        SteveMod.LOGGER.info("Action started! Is complete: {}", createdAction.isComplete());
+
+        // Defensive guard: start() may finish/cancel/rewrite currentAction in custom actions.
+        if (currentAction != createdAction && currentAction == null) {
+            SteveMod.LOGGER.warn(
+                "Steve '{}' action '{}' cleared currentAction during start()",
+                steve.getSteveName(),
+                createdAction.getClass().getSimpleName()
+            );
+        }
     }
 
     /**
@@ -638,6 +671,17 @@ public class ActionExecutor {
         return safetyEvaluatorManager.evaluate(steve, actionContext);
     }
 
+    public SafetySnapshot sampleSafetySnapshot(String actionType) {
+        if (steve.level().isClientSide()) {
+            return SafetySnapshot.safe();
+        }
+        String safeType = (actionType == null || actionType.isBlank()) ? "background" : actionType;
+        SafetySnapshot snapshot = safetyEvaluatorManager.evaluate(steve, actionContext);
+        SafetyDecision decision = safetyEvaluatorManager.recommend(snapshot, safeType);
+        logSafetySnapshotIfChanged(snapshot, decision, safeType);
+        return snapshot;
+    }
+
     /**
      * Checks if the agent is currently planning (async LLM call in progress).
      *
@@ -645,6 +689,121 @@ public class ActionExecutor {
      */
     public boolean isPlanning() {
         return isPlanning;
+    }
+
+    public String getTaskStatusSummaryForUi() {
+        List<String> lines = new ArrayList<>();
+
+        if (isPlanning) {
+            String cmd = pendingCommand == null || pendingCommand.isBlank() ? "..." : pendingCommand;
+            lines.add("[PLANNING] " + truncateUi(cmd, 80));
+        }
+
+        if (currentAction != null) {
+            lines.add("[RUNNING] " + truncateUi(currentAction.getDescription(), 80));
+        }
+
+        if (currentGoal != null && !currentGoal.isBlank()) {
+            lines.add("[GOAL] " + truncateUi(currentGoal, 80));
+        }
+
+        int queued = 0;
+        for (Task queuedTask : taskQueue) {
+            if (queuedTask == null) {
+                continue;
+            }
+            lines.add("[QUEUED] " + taskLabelForUi(queuedTask));
+            queued++;
+            if (queued >= 8) {
+                break;
+            }
+        }
+        if (taskQueue.size() > queued) {
+            lines.add("[QUEUED] +" + (taskQueue.size() - queued) + " more");
+        }
+
+        int nodeLines = 0;
+        for (TaskTreeNode node : taskTree.values()) {
+            if (node == null || node.status == TaskTreeStatus.COMPLETED) {
+                continue;
+            }
+            if (node.queued && node.status == TaskTreeStatus.PENDING) {
+                continue;
+            }
+            lines.add("[" + nodeStatusLabel(node) + "] " + nodeLabelForUi(node));
+            nodeLines++;
+            if (nodeLines >= 8) {
+                break;
+            }
+        }
+
+        if (lines.isEmpty()) {
+            return "No active tasks";
+        }
+        return String.join("\n", lines);
+    }
+
+    public void registerBehavior(BehaviorDefinition behavior) {
+        if (behavior == null || behavior.id() == null || behavior.id().isBlank()) {
+            return;
+        }
+        knownBehaviors.put(behavior.id(), behavior);
+        if (!disabledBehaviors.contains(behavior.id())) {
+            behaviorRegistry.register(behavior);
+        }
+    }
+
+    public void unregisterBehavior(String behaviorId) {
+        if (behaviorId == null || behaviorId.isBlank()) {
+            return;
+        }
+        disabledBehaviors.remove(behaviorId);
+        knownBehaviors.remove(behaviorId);
+        behaviorRegistry.unregister(behaviorId);
+    }
+
+    public boolean setBehaviorEnabled(String behaviorId, boolean enabled) {
+        if (behaviorId == null || behaviorId.isBlank()) {
+            return false;
+        }
+        BehaviorDefinition behavior = knownBehaviors.get(behaviorId);
+        if (behavior == null) {
+            return false;
+        }
+        if (enabled) {
+            disabledBehaviors.remove(behaviorId);
+            behaviorRegistry.register(behavior);
+        } else {
+            disabledBehaviors.add(behaviorId);
+            behaviorRegistry.unregister(behaviorId);
+        }
+        return true;
+    }
+
+    public List<BehaviorStatus> getBehaviorStatuses() {
+        List<BehaviorStatus> statuses = new ArrayList<>();
+        for (BehaviorDefinition behavior : knownBehaviors.values()) {
+            boolean enabled = !disabledBehaviors.contains(behavior.id());
+            statuses.add(new BehaviorStatus(
+                behavior.id(),
+                behavior.lane(),
+                behavior.lanePriority(),
+                behavior.priority(),
+                behavior.cooldownTicks(),
+                behavior.budgetCost(),
+                enabled
+            ));
+        }
+        statuses.sort(java.util.Comparator
+            .comparingInt(BehaviorStatus::lanePriority)
+            .thenComparing(BehaviorStatus::lane)
+            .thenComparingInt(BehaviorStatus::priority)
+            .thenComparing(BehaviorStatus::id));
+        return statuses;
+    }
+
+    public java.util.Set<String> getKnownBehaviorIds() {
+        return Collections.unmodifiableSet(knownBehaviors.keySet());
     }
 
     public void enqueueTask(Task task) {
@@ -717,6 +876,34 @@ public class ActionExecutor {
         }
         return true;
     }
+
+    private void runPassiveBehaviors() {
+        if (steve.level().isClientSide()) {
+            return;
+        }
+        BehaviorContext behaviorContext = new BehaviorContext(
+            steve,
+            this,
+            steve.level().getGameTime()
+        );
+        behaviorScheduler.tick(behaviorContext, PASSIVE_BEHAVIOR_TICK_BUDGET);
+    }
+
+    private void registerDefaultBehaviors() {
+        registerBehavior(new PassiveSafetyPulseBehavior());
+        registerBehavior(new PassiveVisibleScanBehavior());
+        registerBehavior(new PassiveChestScanBehavior());
+    }
+
+    public record BehaviorStatus(
+        String id,
+        String lane,
+        int lanePriority,
+        int priority,
+        int cooldownTicks,
+        int budgetCost,
+        boolean enabled
+    ) {}
 
     private void logSafetySnapshotIfChanged(SafetySnapshot snapshot, SafetyDecision decision, String actionType) {
         if (snapshot == null || decision == null) {
@@ -1648,6 +1835,68 @@ public class ActionExecutor {
             return null;
         }
         return normalized.contains(":") ? normalized : "minecraft:" + normalized;
+    }
+
+    private String taskLabelForUi(Task task) {
+        if (task == null) {
+            return "unknown";
+        }
+        String action = task.getAction() == null ? "unknown" : task.getAction();
+        Map<String, Object> params = task.getParameters();
+        if (params == null || params.isEmpty()) {
+            return truncateUi(action, 80);
+        }
+        Object item = firstPresent(params, "item", "block", "resource", "target", "entity");
+        Object quantity = params.get("quantity");
+        String detail = item == null ? params.toString() : String.valueOf(item);
+        String suffix = quantity == null ? "" : " x" + quantity;
+        return truncateUi(action + " " + detail + suffix, 80);
+    }
+
+    private String nodeLabelForUi(TaskTreeNode node) {
+        if (node == null) {
+            return "unknown";
+        }
+        Object item = firstPresent(node.params, "item", "block", "resource", "target", "entity");
+        Object quantity = node.params.get("quantity");
+        String detail = item == null ? node.params.toString() : String.valueOf(item);
+        String suffix = quantity == null ? "" : " x" + quantity;
+        return truncateUi(node.action + " " + detail + suffix, 80);
+    }
+
+    private String nodeStatusLabel(TaskTreeNode node) {
+        if (node == null) {
+            return "UNKNOWN";
+        }
+        return switch (node.status) {
+            case PENDING -> node.queued ? "QUEUED" : "PENDING";
+            case IN_PROGRESS -> "IN_PROGRESS";
+            case COMPLETED -> "DONE";
+            case FAILED -> "FAILED";
+        };
+    }
+
+    private Object firstPresent(Map<String, Object> params, String... keys) {
+        if (params == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = params.get(key);
+            if (value != null && !value.toString().isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String truncateUi(String text, int maxLen) {
+        if (text == null) {
+            return "";
+        }
+        if (maxLen <= 3 || text.length() <= maxLen) {
+            return text;
+        }
+        return text.substring(0, maxLen - 3) + "...";
     }
 
     private enum TaskTreeStatus {

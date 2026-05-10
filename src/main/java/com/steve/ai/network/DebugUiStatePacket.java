@@ -1,9 +1,6 @@
 package com.steve.ai.network;
 
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraftforge.network.NetworkEvent;
-
-import java.util.function.Supplier;
 
 public record DebugUiStatePacket(boolean enabled) {
 
@@ -15,13 +12,7 @@ public record DebugUiStatePacket(boolean enabled) {
         return new DebugUiStatePacket(buf.readBoolean());
     }
 
-    public static void handle(DebugUiStatePacket packet, Supplier<NetworkEvent.Context> contextSupplier) {
-        NetworkEvent.Context context = contextSupplier.get();
-        context.enqueueWork(() -> {
-            if (context.getSender() != null) {
-                DebugUiTracker.setSubscribed(context.getSender().getUUID(), packet.enabled);
-            }
-        });
-        context.setPacketHandled(true);
+    public static void handle(DebugUiStatePacket packet) {
+        // Transport callback intentionally deferred to SteveNetwork wiring.
     }
 }

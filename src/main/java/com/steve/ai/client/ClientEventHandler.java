@@ -47,6 +47,10 @@ public class ClientEventHandler {
             SteveGUI.openSettingsScreen();
         }
 
+        if (KeyBindings.CYCLE_DEBUG_STEVE != null && KeyBindings.CYCLE_DEBUG_STEVE.consumeClick()) {
+            SteveDebugBlocksData.cycleSelectedSteve(mc);
+        }
+
         StevePovScreenshot.onClientTick();
         SteveDebugTargetRenderer.tickParticleMarkers();
     }

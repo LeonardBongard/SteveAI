@@ -3,6 +3,8 @@ package com.steve.ai.action.actions;
 import com.steve.ai.SteveMod;
 import com.steve.ai.action.ActionResult;
 import com.steve.ai.action.Task;
+import com.steve.ai.action.search.StuckReason;
+import com.steve.ai.config.StevePersona;
 import com.steve.ai.entity.SteveEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -48,6 +50,11 @@ public class PathfindAction extends BaseAction {
     private int terrainRecoveryCooldown;
     private int terrainRecoveryActions;
     private BlockPos lastRecoveryTarget;
+    private StevePersona persona = StevePersona.TUNNELER;
+    private StuckReason currentStuckReason = StuckReason.NONE;
+    private int stuckReasonStartTick = 0;
+    private int lastStuckLogTick = Integer.MIN_VALUE / 4;
+    private static final int STUCK_LOG_REPEAT_TICKS = 80;
 
     public PathfindAction(SteveEntity steve, Task task) {
         super(steve, task);
@@ -73,14 +80,19 @@ public class PathfindAction extends BaseAction {
         terrainRecoveryCooldown = 0;
         terrainRecoveryActions = 0;
         lastRecoveryTarget = null;
+        persona = steve.getPersona();
+        currentStuckReason = StuckReason.NONE;
+        stuckReasonStartTick = 0;
+        lastStuckLogTick = Integer.MIN_VALUE / 4;
 
         steve.getNavigation().setCanFloat(true);
         steve.getNavigation().moveTo(x, y, z, 1.0);
         SteveMod.LOGGER.info(
-            "[SWIM] Steve '{}' pathfind start target={} inWater={}",
+            "[SWIM] Steve '{}' pathfind start target={} inWater={} persona={}",
             steve.getSteveName(),
             targetPos,
-            lastInWater
+            lastInWater,
+            persona
         );
     }
 
@@ -123,6 +135,7 @@ public class PathfindAction extends BaseAction {
         }
 
         if (stuckTicks >= STUCK_REPATH_TICKS && !steve.blockPosition().closerThan(targetPos, arrivalRange)) {
+            noteStuckReason(StuckReason.NO_PROGRESS_WHILE_MOVING, "path movement is not reducing distance to target");
             if (swimReplanCooldown <= 0) {
                 SteveMod.LOGGER.info(
                     "[SWIM] Steve '{}' repath trigger stuckTicks={} inWater={}",
@@ -151,6 +164,7 @@ public class PathfindAction extends BaseAction {
 
         // Land-stuck pathing should fail fast so parent goal can choose another tactic.
         if (stuckTicks >= 220 && !steve.isInWater()) {
+            noteStuckReason(StuckReason.UNREACHABLE_TARGET, "land path remained blocked after recovery attempts");
             result = ActionResult.failure("Path blocked/unreachable: " + targetPos, false);
             return;
         }
@@ -199,7 +213,11 @@ public class PathfindAction extends BaseAction {
 
     @Override
     public String getDescription() {
-        return "Pathfind to " + targetPos;
+        String base = "Pathfind to " + targetPos;
+        if (currentStuckReason.isStuck()) {
+            base += " stuck=" + currentStuckReason.name().toLowerCase(java.util.Locale.ROOT);
+        }
+        return base;
     }
 
     private void trackStuckState() {
@@ -215,10 +233,55 @@ public class PathfindAction extends BaseAction {
             stuckTicks++;
         } else {
             stuckTicks = 0;
+            clearStuckReason("movement-progress");
         }
         lastX = currentX;
         lastY = currentY;
         lastZ = currentZ;
+    }
+
+    private void noteStuckReason(StuckReason reason, String detail) {
+        StuckReason normalized = reason == null ? StuckReason.NONE : reason;
+        if (!normalized.isStuck()) {
+            clearStuckReason(detail);
+            return;
+        }
+        boolean changed = normalized != currentStuckReason;
+        if (changed) {
+            currentStuckReason = normalized;
+            stuckReasonStartTick = ticksRunning;
+            lastStuckLogTick = Integer.MIN_VALUE / 4;
+        }
+        if (!changed && ticksRunning - lastStuckLogTick < STUCK_LOG_REPEAT_TICKS) {
+            return;
+        }
+        lastStuckLogTick = ticksRunning;
+        String goal = steve.getMemory().getCurrentGoal();
+        SteveMod.LOGGER.info(
+            "[STUCK] Steve '{}' reason={} durationTicks={} goal='{}' action=pathfind target={} detail={}",
+            steve.getSteveName(),
+            currentStuckReason,
+            Math.max(0, ticksRunning - stuckReasonStartTick),
+            goal == null ? "" : goal,
+            targetPos,
+            detail == null ? "" : detail
+        );
+    }
+
+    private void clearStuckReason(String resolution) {
+        if (!currentStuckReason.isStuck()) {
+            return;
+        }
+        SteveMod.LOGGER.info(
+            "[STUCK] Steve '{}' cleared reason={} after {} ticks ({})",
+            steve.getSteveName(),
+            currentStuckReason,
+            Math.max(0, ticksRunning - stuckReasonStartTick),
+            resolution == null ? "" : resolution
+        );
+        currentStuckReason = StuckReason.NONE;
+        stuckReasonStartTick = ticksRunning;
+        lastStuckLogTick = Integer.MIN_VALUE / 4;
     }
 
     private double pathSpeed() {
@@ -374,6 +437,10 @@ public class PathfindAction extends BaseAction {
     }
 
     private boolean tryMineForwardTunnel(ServerLevel level, BlockPos forward) {
+        if (persona.prefersCaveExploration()) {
+            // Explorer persona avoids strip-mining style recovery and prefers reroute/exploration.
+            return false;
+        }
         if (mineIfBreakable(level, forward, "forward tunnel")) {
             return true;
         }

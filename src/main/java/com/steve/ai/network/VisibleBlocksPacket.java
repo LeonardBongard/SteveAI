@@ -4,13 +4,11 @@ import com.steve.ai.client.VisibleBlocksCache;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.Identifier;
-import net.minecraftforge.network.NetworkEvent;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.function.Supplier;
 
 public record VisibleBlocksPacket(UUID steveId, String steveName, List<BlockEntry> blocks) {
 
@@ -49,10 +47,8 @@ public record VisibleBlocksPacket(UUID steveId, String steveName, List<BlockEntr
         return new VisibleBlocksPacket(steveId, steveName, entries);
     }
 
-    public static void handle(VisibleBlocksPacket packet, Supplier<NetworkEvent.Context> contextSupplier) {
-        NetworkEvent.Context context = contextSupplier.get();
-        context.enqueueWork(() -> VisibleBlocksCache.updateSnapshot(packet));
-        context.setPacketHandled(true);
+    public static void handle(VisibleBlocksPacket packet) {
+        VisibleBlocksCache.updateSnapshot(packet);
     }
 
     public record BlockEntry(Identifier blockId, BlockPos position, @Nullable String metadata) {

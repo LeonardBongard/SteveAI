@@ -3,10 +3,10 @@ package com.steve.ai.config;
 import com.steve.ai.SteveMod;
 
 public final class SteveRuntimeSettings {
-    private static int visibleScanRadius = 6;
-    private static int visibleMaxEntries = 960;
-    private static int syncedWorkingPositions = 256;
-    private static int syncedEpisodicPositions = 256;
+    private static int visibleScanRadius = 24;
+    private static int visibleMaxEntries = 3840;
+    private static int syncedWorkingPositions = 1024;
+    private static int syncedEpisodicPositions = 1024;
     private static float memoryMarkerScale = 1.0F;
 
     private SteveRuntimeSettings() {}

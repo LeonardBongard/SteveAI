@@ -25,9 +25,12 @@ public class SteveConfig {
     public static final ForgeConfigSpec.IntValue DEBUG_VISIBLE_BLOCK_MAX_ENTRIES;
     public static final ForgeConfigSpec.BooleanValue DEBUG_BROADCAST_VISIBLE_BLOCKS;
     public static final ForgeConfigSpec.BooleanValue ENABLE_VIEW_COVERAGE_OVERLAY;
+    public static final ForgeConfigSpec.ConfigValue<String> PERSONA_DEFAULT;
+    public static final ForgeConfigSpec.ConfigValue<String> PERSONA_OVERRIDES;
     public static final ForgeConfigSpec.BooleanValue AUTO_RUN_IRON_PICKAXE_PLAYTEST_ON_WORLD_LOAD;
     public static final ForgeConfigSpec.BooleanValue AUTO_PLAYTEST_AUTO_SPAWN_STEVE;
     public static final ForgeConfigSpec.ConfigValue<String> AUTO_PLAYTEST_STEVE_NAME;
+    public static final ForgeConfigSpec.ConfigValue<String> AUTO_PLAYTEST_MATRIX;
     public static final ForgeConfigSpec.IntValue AUTO_PLAYTEST_TIMEOUT_SECONDS;
     
     // Ollama configuration
@@ -102,11 +105,11 @@ public class SteveConfig {
 
         DEBUG_VISIBLE_BLOCK_RADIUS = builder
             .comment("Radius around each Steve to sample visible blocks for debug snapshots")
-            .defineInRange("debugVisibleBlockRadius", 6, 1, 32);
+            .defineInRange("debugVisibleBlockRadius", 24, 1, 32);
 
         DEBUG_VISIBLE_BLOCK_MAX_ENTRIES = builder
             .comment("Maximum number of block entries to include in a visible-block snapshot")
-            .defineInRange("debugVisibleBlockMaxEntries", 200, 10, 2000);
+            .defineInRange("debugVisibleBlockMaxEntries", 800, 10, 2000);
 
         DEBUG_BROADCAST_VISIBLE_BLOCKS = builder
             .comment("Dev mode: broadcast visible-block snapshots to all players (ignores debug UI subscription)")
@@ -114,6 +117,14 @@ public class SteveConfig {
         ENABLE_VIEW_COVERAGE_OVERLAY = builder
             .comment("Show view coverage summary and least-seen directions in the debug overlay")
             .define("enableViewCoverageOverlay", false);
+
+        PERSONA_DEFAULT = builder
+            .comment("Default Steve persona. Supported: tunneler, cave_explorer")
+            .define("personaDefault", "tunneler");
+
+        PERSONA_OVERRIDES = builder
+            .comment("Per-Steve persona overrides: name:persona pairs separated by comma. Example: Steve:tunneler,Alex:cave_explorer")
+            .define("personaOverrides", "Steve:tunneler,Alex:cave_explorer");
 
         MAX_ACTIVE_STEVES = builder
             .comment("Maximum number of Steves that can be active simultaneously")
@@ -156,8 +167,12 @@ public class SteveConfig {
             .define("autoPlaytestAutoSpawnSteve", true);
 
         AUTO_PLAYTEST_STEVE_NAME = builder
-            .comment("Steve name used for world-load auto playtest")
-            .define("autoPlaytestSteveName", "Steve");
+            .comment("Steve name(s) used for world-load auto playtest. Comma-separated values are allowed, e.g. Steve,Alex")
+            .define("autoPlaytestSteveName", "Steve,Alex");
+
+        AUTO_PLAYTEST_MATRIX = builder
+            .comment("Auto playtest matrix. Entries: name:scenario or name:persona:scenario, comma-separated. Example: Steve:tunneler:iron_pickaxe,Alex:cave_explorer:iron_pickaxe")
+            .define("autoPlaytestMatrix", "Steve:tunneler:iron_pickaxe,Alex:cave_explorer:iron_pickaxe");
 
         AUTO_PLAYTEST_TIMEOUT_SECONDS = builder
             .comment("Timeout seconds for world-load auto playtest")

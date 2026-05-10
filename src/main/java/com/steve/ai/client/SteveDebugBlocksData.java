@@ -44,6 +44,30 @@ public final class SteveDebugBlocksData {
         return "Unknown";
     }
 
+    public static SteveEntity getSelectedSteve(Minecraft minecraft, double searchRadius) {
+        if (minecraft == null || minecraft.level == null || minecraft.player == null) {
+            return null;
+        }
+        if (selectedSteveId != null) {
+            Entity selected = minecraft.level.getEntity(selectedSteveId);
+            if (selected instanceof SteveEntity steveEntity) {
+                return steveEntity;
+            }
+        }
+        List<SteveEntity> steves = minecraft.level.getEntitiesOfClass(
+            SteveEntity.class,
+            minecraft.player.getBoundingBox().inflate(searchRadius)
+        );
+        if (steves.isEmpty()) {
+            selectedSteveId = null;
+            return null;
+        }
+        steves.sort(Comparator.comparingDouble(s -> s.distanceToSqr(minecraft.player)));
+        SteveEntity nearest = steves.getFirst();
+        selectedSteveId = nearest.getId();
+        return nearest;
+    }
+
     public static void cycleSelectedSteve(Minecraft minecraft) {
         if (minecraft == null || minecraft.level == null) {
             return;

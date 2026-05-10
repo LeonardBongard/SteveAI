@@ -5,8 +5,10 @@ import net.minecraft.client.model.HumanoidModel;
 import net.minecraft.client.model.geom.ModelLayers;
 import net.minecraft.client.renderer.entity.HumanoidMobRenderer;
 import net.minecraft.client.renderer.entity.state.HumanoidRenderState;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.resources.Identifier;
 import net.minecraftforge.client.event.EntityRenderersEvent;
+import net.minecraftforge.registries.ForgeRegistries;
 import com.steve.ai.entity.SteveEntity;
 
 /**
@@ -23,7 +25,18 @@ public class ClientSetup {
     }
 
     public static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {
-        event.registerEntityRenderer(SteveMod.STEVE_ENTITY.get(), context ->
+        EntityType<?> rawType = ForgeRegistries.ENTITY_TYPES.getValue(
+            Identifier.fromNamespaceAndPath(SteveMod.MODID, "steve")
+        );
+        if (!(rawType instanceof EntityType<?> entityType)) {
+            SteveMod.LOGGER.warn("Skipping Steve renderer registration: entity type 'steve:steve' not available yet");
+            return;
+        }
+
+        @SuppressWarnings("unchecked")
+        EntityType<SteveEntity> steveEntityType = (EntityType<SteveEntity>) entityType;
+
+        event.registerEntityRenderer(steveEntityType, context ->
             new HumanoidMobRenderer<SteveEntity, HumanoidRenderState, HumanoidModel<HumanoidRenderState>>(
                 context,
                 new HumanoidModel<>(context.bakeLayer(ModelLayers.PLAYER)),

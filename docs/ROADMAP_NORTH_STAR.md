@@ -11,6 +11,9 @@ Given a goal like "set up a safe early-game base and food loop", Steve should:
 4. Use inventory, tools, and environment correctly.
 5. Recover from failure without stalling.
 
+Scrum Product Goal wording:
+- Steve is a reliable Minecraft agent that can create, execute, inspect, and update its own task plans in-world, using reusable systems instead of local one-off fixes.
+
 ## Core Capability Domains
 1. Job Execution:
 - Mining
@@ -39,6 +42,7 @@ Given a goal like "set up a safe early-game base and food loop", Steve should:
 - Explicit state machine
 - Interrupts and replanning
 - Action result reporting and observability
+- Stuck detection and runtime replan loop
 
 ## Scope for Current Program
 1. Implement now:
