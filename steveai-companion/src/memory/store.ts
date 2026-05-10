@@ -20,7 +20,7 @@ import { logs } from '../log.js';
 
 const DEFAULT_PATH = path.resolve(process.cwd(), 'data', 'memory.db');
 export const EMBED_DIM = 768; // nomic-embed-text
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 let db: DB | null = null;
 
@@ -102,6 +102,10 @@ function initSchema(handle: DB): void {
     -- v3 (robustness P5): adds verified column. Save logic refuses to
     -- overwrite verified=1 skills (forces the LLM to pick a new name);
     -- unverified skills can still be patched in-place during DEPS retry.
+    -- v4 (auto-demote): adds consecutive_failures column. Verified skills
+    -- that fail N times in a row get auto-demoted (verified=0) so the
+    -- library self-heals when external assumptions change (e.g. RAG data
+    -- updates that make old skills incompatible).
     CREATE TABLE IF NOT EXISTS skills (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts TEXT NOT NULL,
@@ -112,16 +116,19 @@ function initSchema(handle: DB): void {
       failure_count INTEGER NOT NULL DEFAULT 0,
       last_invoked_at TEXT,
       embedding BLOB,
-      verified INTEGER NOT NULL DEFAULT 0
+      verified INTEGER NOT NULL DEFAULT 0,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0
     );
   `);
 
-  // Migration: v2 → v3 add `verified` column if missing.
+  // Migrations: ALTER COLUMN if missing on existing DBs.
   const cols = handle.prepare("PRAGMA table_info('skills')").all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === 'verified')) {
     handle.exec("ALTER TABLE skills ADD COLUMN verified INTEGER NOT NULL DEFAULT 0");
-    // Existing skills with success_count > 0 are retroactively verified.
     handle.exec('UPDATE skills SET verified = 1 WHERE success_count > 0');
+  }
+  if (!cols.some((c) => c.name === 'consecutive_failures')) {
+    handle.exec("ALTER TABLE skills ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0");
   }
 
   const stored = handle

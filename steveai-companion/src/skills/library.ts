@@ -37,6 +37,7 @@ interface SkillRow {
   failure_count: number;
   last_invoked_at: string | null;
   verified: number;
+  consecutive_failures: number;
 }
 
 function rowToSkill(r: SkillRow): Skill {
@@ -90,13 +91,14 @@ export class SkillLibrary {
       [string, string, string, string],
       SkillRow
     >(`
-      INSERT INTO skills (ts, name, description, code, success_count, failure_count, verified)
-      VALUES (?, ?, ?, ?, 0, 0, 0)
+      INSERT INTO skills (ts, name, description, code, success_count, failure_count, verified, consecutive_failures)
+      VALUES (?, ?, ?, ?, 0, 0, 0, 0)
       ON CONFLICT(name) DO UPDATE SET
         ts = excluded.ts,
         description = excluded.description,
-        code = excluded.code
-      RETURNING id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified
+        code = excluded.code,
+        consecutive_failures = 0
+      RETURNING id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures
     `);
     const row = upsert.get(ts, cleanName, description, code);
     if (!row) throw new Error(`skill insert returned no row for ${cleanName}`);
@@ -126,7 +128,7 @@ export class SkillLibrary {
   private getRow(name: string): SkillRow | null {
     const row = getDb()
       .prepare<[string], SkillRow>(
-        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified
+        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures
          FROM skills WHERE name = ?`
       )
       .get(name);
@@ -156,7 +158,7 @@ export class SkillLibrary {
 
     const rows = getDb()
       .prepare<[Buffer, number], SkillRow>(
-        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified
+        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures
          FROM skills
          WHERE embedding IS NOT NULL
          ORDER BY verified DESC, vec_distance_cosine(embedding, ?) ASC
@@ -167,7 +169,7 @@ export class SkillLibrary {
     return rows.map(rowToSkill);
   }
 
-  /** Track success after a successful invocation. Light-touch; doesn't fail. */
+  /** Track success after a successful invocation. Resets consecutive_failures. */
   recordSuccess(name: string): void {
     const cleanName = sanitizeName(name);
     const ts = nowIso();
@@ -175,6 +177,7 @@ export class SkillLibrary {
       .prepare<[string, string]>(
         `UPDATE skills
          SET success_count = success_count + 1,
+             consecutive_failures = 0,
              last_invoked_at = ?
          WHERE name = ?`
       )
@@ -188,6 +191,7 @@ export class SkillLibrary {
       .prepare<[string, string]>(
         `UPDATE skills
          SET failure_count = failure_count + 1,
+             consecutive_failures = consecutive_failures + 1,
              last_invoked_at = ?
          WHERE name = ?`
       )
@@ -195,10 +199,34 @@ export class SkillLibrary {
     logs.act.warn({ skill: cleanName, error }, 'skill recorded failure');
   }
 
+  /**
+   * Auto-demote a verified skill that has failed too many times in a row.
+   * Resets consecutive_failures so the LLM can retry / rewrite the skill
+   * without being immediately demoted again on the next attempt.
+   *
+   * Returns true if the skill was demoted (it was verified AND over threshold).
+   */
+  demoteIfRecurrentFailures(name: string, threshold: number): boolean {
+    const cleanName = sanitizeName(name);
+    const row = this.getRow(cleanName);
+    if (!row || row.verified !== 1) return false;
+    if (row.consecutive_failures < threshold) return false;
+    getDb()
+      .prepare<[string]>(
+        `UPDATE skills SET verified = 0, consecutive_failures = 0 WHERE name = ?`
+      )
+      .run(cleanName);
+    logs.act.warn(
+      { skill: cleanName, threshold, prior_failures: row.consecutive_failures },
+      'skill auto-demoted (consecutive failures)'
+    );
+    return true;
+  }
+
   list(limit = 50): Skill[] {
     const rows = getDb()
       .prepare<[number], SkillRow>(
-        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified
+        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures
          FROM skills
          ORDER BY verified DESC, (success_count - failure_count) DESC, ts DESC
          LIMIT ?`

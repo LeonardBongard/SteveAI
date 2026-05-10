@@ -204,8 +204,15 @@ const HANDLERS: Record<ToolName, Handler> = {
       return `invoked ${skill.name} ok in ${result.durationMs}ms${valueStr}`;
     }
     skills.recordFailure(skill.name, result.error ?? '');
+    // Auto-demote: a verified skill that keeps failing is probably stale
+    // (e.g. its assumptions don't match the world anymore). Demote so the
+    // next searchSkill ranks alternatives ahead of it.
+    const demoted = skills.demoteIfRecurrentFailures(skill.name, 2);
     state.skillLog.push({ name: skill.name, ok: false, ...(result.error ? { error: result.error } : {}) });
-    return `failed: ${skill.name}: ${result.error ?? 'unknown error'}`;
+    const demoteNote = demoted
+      ? ` (auto-demoted to unverified after recurrent failures — consider writing a replacement under a new name)`
+      : '';
+    return `failed: ${skill.name}: ${result.error ?? 'unknown error'}${demoteNote}`;
   },
 
   searchSkill: async (a) => {
