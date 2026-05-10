@@ -87,11 +87,40 @@ const HANDLERS: Record<ToolName, Handler> = {
 // Public entry point — called from bot.ts on every player chat.
 // ============================================================================
 
+export interface PlannerHooks {
+  /** Called once per LLM tool call after it executes. Useful for the eval harness. */
+  onToolCall?: (info: {
+    step: number;
+    tool: string;
+    args: unknown;
+    observation: string;
+    durationMs: number;
+  }) => void;
+}
+
+export interface PlannerOptions {
+  hooks?: PlannerHooks;
+  /** If true, await the playbook capture before returning. Default false (fire-and-forget — what production wants). */
+  awaitCapture?: boolean;
+}
+
+export interface PlannerResult {
+  steps: number;
+  hitStepLimit: boolean;
+  captured: boolean;
+  trace: string[];
+  lastAssistant: string;
+  durationMs: number;
+}
+
 export async function handlePlayerChat(
   bot: Bot,
   speakerName: string,
-  message: string
-): Promise<void> {
+  message: string,
+  options: PlannerOptions = {}
+): Promise<PlannerResult> {
+  const turnStartedAt = Date.now();
+  const hooks = options.hooks ?? {};
   logs.plan.info({ speaker: speakerName, message }, 'turn start');
 
   // 1. Persist the player turn (sliding window + retrieval index).
@@ -123,7 +152,14 @@ export async function handlePlayerChat(
       const reason = (err as Error).message;
       logs.plan.error({ err: reason, step: stepIdx }, 'LLM call failed');
       bot.chat('(my brain just hiccuped — try again?)');
-      return;
+      return {
+        steps: stepIdx,
+        hitStepLimit: false,
+        captured: false,
+        trace,
+        lastAssistant,
+        durationMs: Date.now() - turnStartedAt,
+      };
     }
 
     const text = result.content.trim();
@@ -157,8 +193,17 @@ export async function handlePlayerChat(
     // Execute every tool call from this batch; collect observations as
     // tool-role messages.
     for (const call of result.toolCalls) {
+      const callStart = Date.now();
       const observation = await dispatch(call.name, call.args, ctx);
+      const callDuration = Date.now() - callStart;
       trace.push(`${call.name}: ${shortDesc(observation)}`);
+      hooks.onToolCall?.({
+        step: stepIdx + 1,
+        tool: call.name,
+        args: call.args,
+        observation,
+        durationMs: callDuration,
+      });
       messages.push({
         role: 'tool',
         content: observation,
@@ -181,13 +226,33 @@ export async function handlePlayerChat(
   //    starting with "failed" anywhere in the trace ⇒ skip capture.
   const hadAction = trace.some((s) => /^(goto|mineBlock|placeBlock|equipItem|followPlayer):/.test(s));
   const hadFailure = trace.some((s) => /failed|cannot|timeout/i.test(s));
+  let captured = false;
   if (hadAction && !hadFailure) {
-    void playbook.capture({ intent: message, steps: trace }).catch((err) =>
-      logs.mem.warn({ err: (err as Error).message }, 'playbook.capture failed')
-    );
+    if (options.awaitCapture) {
+      try {
+        const recipe = await playbook.capture({ intent: message, steps: trace });
+        captured = recipe !== null;
+      } catch (err) {
+        logs.mem.warn({ err: (err as Error).message }, 'playbook.capture failed');
+      }
+    } else {
+      void playbook.capture({ intent: message, steps: trace }).catch((err) =>
+        logs.mem.warn({ err: (err as Error).message }, 'playbook.capture failed')
+      );
+      captured = true; // optimistic; the eval harness uses awaitCapture for accuracy
+    }
   }
 
-  logs.plan.info({ speaker: speakerName, steps: stepIdx, captured: hadAction && !hadFailure }, 'turn end');
+  logs.plan.info({ speaker: speakerName, steps: stepIdx, captured }, 'turn end');
+
+  return {
+    steps: stepIdx,
+    hitStepLimit: stepIdx >= MAX_TOOL_STEPS_PER_INTENT,
+    captured,
+    trace,
+    lastAssistant,
+    durationMs: Date.now() - turnStartedAt,
+  };
 }
 
 // ============================================================================
