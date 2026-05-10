@@ -15,8 +15,10 @@ import { logs } from '../log.js';
 export type RecipeView = {
   result: { name: string; count: number };
   ingredients: Array<{ name: string; count: number }>;
-  shape?: string[][] | undefined; // 2D pattern of item names (or null for empty)
+  shape?: string[][] | undefined; // 2D pattern of item names (or empty cells)
   station: 'crafting_table' | 'inventory' | 'furnace';
+  /** True if this recipe fits Minecraft's 2x2 inventory crafting grid. */
+  inventoryCraftable: boolean;
 };
 
 export type MobView = {
@@ -193,13 +195,39 @@ function normalizeRecipe(
   }
 
   const ingredients = [...counts.entries()].map(([name, count]) => ({ name, count }));
+  const inventoryCraftable = fitsInInventoryGrid(shape, ingredients);
   const recipe: RecipeView = {
     result: { name: resultName, count: resultCount },
     ingredients,
-    station: 'crafting_table',
+    station: inventoryCraftable ? 'inventory' : 'crafting_table',
+    inventoryCraftable,
   };
   if (shape.length > 0) recipe.shape = shape;
   return recipe;
+}
+
+/**
+ * Minecraft rule: the 2x2 inventory crafting grid accepts any recipe whose
+ * pattern fits within 2x2. Shapeless recipes with ≤ 4 ingredient slots
+ * (≤ 4 total items) also fit. Anything larger requires a crafting_table.
+ *
+ * This is the FIX for the v2-playtest "crafting-table fixation" bug:
+ * previously every recipe was marked `crafting_table`, leading the LLM into
+ * circular reasoning ("I need a crafting_table to craft a crafting_table").
+ */
+function fitsInInventoryGrid(
+  shape: string[][],
+  ingredients: Array<{ name: string; count: number }>
+): boolean {
+  // Shaped recipe: explicit grid dimensions.
+  if (shape.length > 0) {
+    const rows = shape.length;
+    const cols = Math.max(...shape.map((r) => r.length));
+    return rows <= 2 && cols <= 2;
+  }
+  // Shapeless recipe: just count total ingredient units. ≤4 fits 2x2.
+  const total = ingredients.reduce((s, i) => s + i.count, 0);
+  return total <= 4;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -93,21 +93,33 @@ interface PlannerState {
   capturedThisTurn: boolean;
   /** Skill execution log this turn — fed back into planner state. */
   skillLog: Array<{ name: string; ok: boolean; error?: string }>;
+  /** P4: last chat message sent this turn. Dedup against this to stop
+   *  the LLM from repeating itself 3× when it loses track of completion. */
+  lastChatMessage: string | null;
 }
 
 const HANDLERS: Record<ToolName, Handler> = {
   // --- I/O ---
-  chat: async (a, { bot }) => {
+  chat: async (a, { bot }, state) => {
     const args = parseToolArgs('chat', a);
+    // P4: dedup chat within the same turn. The LLM sometimes calls chat
+    // with the same message 2-3× back-to-back when it loses track of
+    // completion. Don't actually send the duplicate; tell the LLM to stop.
+    if (state.lastChatMessage === args.message) {
+      return `skipped duplicate chat (you already said this — STOP repeating, the player heard you).`;
+    }
+    state.lastChatMessage = args.message;
     safeSay(bot, args.message);
     return `said: ${truncate(args.message, 80)}`;
   },
 
   // --- Skills ---
   // writeSkill: P1 syntax pre-check → P6 await-lint → P5 refuse overwrite of
-  // verified skills → save → P2 immediate auto-test → on success, mark
-  // verified. Failures flow back as DEPS observations on the same turn.
-  writeSkill: async (a, { bot }, state) => {
+  // verified skills → save → P2/P3 immediate auto-test with smart-default
+  // args → on success, mark verified. Failures flow back as DEPS observations
+  // on the same turn.
+  writeSkill: async (a, ctx, state) => {
+    const { bot } = ctx;
     const args = parseToolArgs('writeSkill', a);
 
     // P1: syntax pre-check before any persistence.
@@ -135,7 +147,11 @@ const HANDLERS: Record<ToolName, Handler> = {
     // empty-args contracts most of the time; arg-required skills can still
     // be invoked with args afterward. Auto-test result becomes part of the
     // observation either way.
-    const testResult = await runSkillBody(args.code, bot, {});
+    //
+    // P3: build reasonable test args by scanning the code for args.X
+    // references. e.g. `args.name` → speakerName, `args.count` → 1.
+    const testArgs = buildAutoTestArgs(args.code, ctx.speakerName);
+    const testResult = await runSkillBody(args.code, bot, testArgs);
     const warnsTxt = warnings.length > 0 ? ` warnings: ${warnings.join(' | ')};` : '';
     if (testResult.ok) {
       skills.markVerified(saved.name);
@@ -343,7 +359,7 @@ export async function handlePlayerChat(
   const messages = buildContext({ window, pinned, similar, botState });
 
   const ctx: PlannerCtx = { bot, speakerName };
-  const state: PlannerState = { capturedThisTurn: false, skillLog: [] };
+  const state: PlannerState = { capturedThisTurn: false, skillLog: [], lastChatMessage: null };
   const trace: string[] = [];
   let lastAssistant = '';
   let stepIdx = 0;
@@ -649,6 +665,52 @@ function indentLines(s: string, indent: string): string {
     .join('\n');
 }
 
+/**
+ * P3: scan a skill body for `args.X` references and synthesize plausible
+ * defaults so the auto-test doesn't trivially fail on undefined args. The
+ * skill that prompted this was `go_to_player` reading `args.name` — without
+ * defaults the auto-test always died on `no player named undefined`.
+ *
+ * Heuristics:
+ *   args.name / username / player → speakerName (who's talking right now)
+ *   args.count / n / num / amount → 1
+ *   args.distance / range / maxDistance → 16
+ *   args.blockName / blockType / itemName → 'dirt' (cheap & always findable)
+ *   args.x / y / z → bot's current position component (caller supplies bot)
+ *
+ * Anything unrecognized is filled with null so `args.foo` doesn't throw
+ * for plain reads, but obvious-typo-or-misuse will still surface.
+ */
+function buildAutoTestArgs(code: string, speakerName: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const refs = new Set<string>();
+  for (const m of code.matchAll(/\bargs\.([A-Za-z_]\w*)\b/g)) {
+    if (m[1]) refs.add(m[1]);
+  }
+  for (const ref of refs) {
+    out[ref] = defaultArgValue(ref, speakerName);
+  }
+  return out;
+}
+
+function defaultArgValue(name: string, speakerName: string): unknown {
+  const lc = name.toLowerCase();
+  if (lc === 'name' || lc.includes('player') || lc.includes('username') || lc.includes('user')) {
+    return speakerName;
+  }
+  if (lc === 'count' || lc === 'n' || lc === 'num' || lc.includes('amount') || lc.includes('quantity')) {
+    return 1;
+  }
+  if (lc.includes('distance') || lc.includes('range')) return 16;
+  if (lc === 'block' || lc.includes('blockname') || lc.includes('blocktype')) return 'dirt';
+  if (lc === 'item' || lc.includes('itemname') || lc.includes('itemtype')) return 'dirt';
+  if (lc === 'x') return 0;
+  if (lc === 'y') return 64;
+  if (lc === 'z') return 0;
+  if (lc.includes('mob') || lc.includes('entity')) return 'cow';
+  return null;
+}
+
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
@@ -676,9 +738,20 @@ function formatValue(v: unknown): string {
   return String(v);
 }
 
-function formatRecipe(r: { result: { name: string; count: number }; ingredients: Array<{ name: string; count: number }>; station: string }): string {
+function formatRecipe(r: {
+  result: { name: string; count: number };
+  ingredients: Array<{ name: string; count: number }>;
+  station: string;
+  inventoryCraftable?: boolean;
+}): string {
   const ings = r.ingredients.map((i) => `${i.count}x ${i.name}`).join(' + ');
-  return `${r.result.count}x ${r.result.name} = ${ings} (${r.station})`;
+  // P0: tell the LLM where the recipe is craftable. The 'inventory' label is
+  // critical for items like crafting_table itself, oak_planks, sticks, etc.
+  // that don't actually need a table.
+  const stationNote = r.inventoryCraftable
+    ? 'inventory 2x2 grid OR crafting_table'
+    : 'crafting_table needed (3x3 grid)';
+  return `${r.result.count}x ${r.result.name} = ${ings} [${stationNote}]`;
 }
 
 function formatResolved(

@@ -65,8 +65,10 @@ export async function runSkillBody(
     args,
   });
 
-  // The LLM writes the BODY of an async function. We wrap.
-  const wrapped = `(async (bot, args) => {\n${code}\n});`;
+  // P1: tolerate common LLM wrappings — strip outer `async function (bot, args) {…}`
+  // or `(bot, args) => {…}` before our own IIFE wrapper.
+  const body = extractBody(code);
+  const wrapped = `(async (bot, args) => {\n${body}\n});`;
 
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -116,10 +118,11 @@ export async function runOnceCode(
  * Returns null if the code is parseable, or a short error string if not.
  */
 export function checkSkillSyntax(code: string): string | null {
+  const body = extractBody(code);
   // Wrap exactly as runSkillBody will. Use vm.compileFunction so we don't
   // execute anything — pure syntax validation.
   try {
-    vm.compileFunction(`(async (bot, args) => {\n${code}\n});`, [], {
+    vm.compileFunction(`(async (bot, args) => {\n${body}\n});`, [], {
       parsingContext: vm.createContext({}),
     });
     return null;
@@ -131,4 +134,46 @@ export function checkSkillSyntax(code: string): string | null {
     }
     return err instanceof Error ? err.message : String(err);
   }
+}
+
+/**
+ * P1 — strip common LLM-supplied wrappers so the LLM doesn't get punished
+ * for writing `async function (bot, args) {…}` (the v2 playtest failure
+ * mode). Returns the body that should go inside our own IIFE wrapper.
+ *
+ * Patterns handled (most specific first):
+ *   async function NAME(bot, args) {…}
+ *   async function (bot, args) {…}           ← original parse-error case
+ *   function NAME(bot, args) {…}
+ *   function (bot, args) {…}                  ← also parse-errors as-is
+ *   async (bot, args) => {…}
+ *   (bot, args) => {…}
+ *
+ * Anything else is returned as-is (treated as statement-level code).
+ */
+export function extractBody(code: string): string {
+  const trimmed = code.trim();
+
+  // Try wrapper patterns in priority order. Each captures the inner body.
+  const patterns: RegExp[] = [
+    // async function NAME(...) { ... }
+    /^async\s+function\s+\w+\s*\([^)]*\)\s*\{([\s\S]*)\}\s*;?\s*$/,
+    // async function (...) { ... }
+    /^async\s+function\s*\([^)]*\)\s*\{([\s\S]*)\}\s*;?\s*$/,
+    // function NAME(...) { ... }
+    /^function\s+\w+\s*\([^)]*\)\s*\{([\s\S]*)\}\s*;?\s*$/,
+    // function (...) { ... }
+    /^function\s*\([^)]*\)\s*\{([\s\S]*)\}\s*;?\s*$/,
+    // async (...) => { ... }
+    /^async\s*\([^)]*\)\s*=>\s*\{([\s\S]*)\}\s*;?\s*$/,
+    // (...) => { ... }
+    /^\([^)]*\)\s*=>\s*\{([\s\S]*)\}\s*;?\s*$/,
+  ];
+
+  for (const re of patterns) {
+    const m = re.exec(trimmed);
+    if (m && m[1] !== undefined) return m[1];
+  }
+
+  return code;
 }

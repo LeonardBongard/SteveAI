@@ -113,6 +113,15 @@ on the next turn and let you patch.
 
 ## API gotchas (these are real failure modes I have seen in this project)
 
+- goals IS A TOP-LEVEL GLOBAL inside skills (along with bot, Vec3, Movements,
+  console). Do NOT try to access it through bot:
+    const goals = bot.pathfinder.goals;       // ❌ undefined
+    const { GoalGetToBlock } = bot.pathfinder.goals;  // ❌ same
+  Use directly:
+    new goals.GoalGetToBlock(x, y, z)         // ✓
+    new goals.GoalNear(x, y, z, 1)             // ✓
+- Players have e.username (e.g. 'Yailix'). Mobs have e.name (e.g. 'spider').
+  Don't use e.name to match players or e.username to match mobs.
 - bot.findBlock returns NULL if nothing matches. Always null-check before
   using .position.
 - bot.dig / bot.placeBlock / bot.equip / bot.attack / bot.craft / bot.lookAt /
@@ -125,6 +134,10 @@ on the next turn and let you patch.
   Strings will not work.
 - new Vec3(x, y, z) is the constructor; addition is .offset(dx, dy, dz),
   NOT the + operator (JS doesn't overload arithmetic on objects).
+- Recipe stations: lookupRecipe returns a "[inventory 2x2 grid OR crafting_table]"
+  or "[crafting_table needed (3x3 grid)]" tag. If 2x2-craftable, you do NOT need
+  a crafting_table block — the recipe runs in the player's inventory grid.
+  This includes oak_planks, sticks, torches, AND crafting_table itself.
 
 # Workflow rules (follow these for every player request)
 
