@@ -133,10 +133,15 @@ function initSchema(handle: DB): void {
       .prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?)")
       .run(String(SCHEMA_VERSION));
   } else if (Number(stored.value) !== SCHEMA_VERSION) {
-    // No migrations yet — when v2 lands, branch here.
-    logs.mem.warn(
-      { stored: stored.value, expected: SCHEMA_VERSION },
-      'schema version mismatch; no migration available'
+    // The DDL above runs CREATE TABLE IF NOT EXISTS + the v2→v3 ALTER
+    // (verified column). That's all the migration we need for v1→v3.
+    // Just bump the meta row to acknowledge.
+    handle
+      .prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'")
+      .run(String(SCHEMA_VERSION));
+    logs.mem.info(
+      { from: stored.value, to: SCHEMA_VERSION },
+      'schema migrated'
     );
   }
 }

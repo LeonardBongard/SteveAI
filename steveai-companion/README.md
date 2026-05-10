@@ -60,6 +60,67 @@ npm start                      # one-shot
 
 You should see the bot connect, log into the world, and announce itself in chat. Type a message in-game; the bot replies via `gpt-oss:20b`.
 
+## Watching the bot live (v2 — code-gen visibility)
+
+The v2 architecture has the LLM writing JS skills at runtime. To see what it's actually doing:
+
+**1. The terminal where `npm start` runs** shows a colored pino log line per tool call as it happens:
+
+```
+[ACT]  writeSkill(name=mine_one_oak_log, desc="Find the nearest oak_log within 32...", code=312 chars) → saved + test-invoked "mine_one_oak_log" successfully in 412ms. Marked verified.
+[ACT]  invokeSkill({"name":"mine_one_oak_log"}) → invoked mine_one_oak_log ok in 1840ms
+[ACT]  lookupRecipe({"item":"fishing_rod"}) → 1x fishing_rod = 3x stick + 2x string (crafting_table)
+```
+
+**2. The skills Steve has written are saved as plain `.js` files** at `data/skills/<skill_name>.js`, with a metadata header:
+
+```bash
+ls data/skills/
+cat data/skills/craft_fishing_rod.js
+```
+
+```javascript
+// SteveAI skill — generated at runtime by gpt-oss:20b.
+// name:        craft_fishing_rod
+// description: Open a crafting table within 16 blocks and craft 1 fishing_rod...
+// verified:    true
+// counts:      ✓3 / ✗1
+// updated:     2026-05-10T21:14:32.118Z
+
+const tableId = bot.registry.blocksByName.crafting_table.id;
+const table = bot.findBlock({ matching: tableId, maxDistance: 16 });
+...
+```
+
+**3. Per-session transcript** at `data/transcripts/<timestamp>.log` — append-only audit trail. Open another terminal and:
+
+```bash
+tail -f data/transcripts/$(ls -t data/transcripts | head -1)
+```
+
+You'll see every player turn, every tool call (with summary args), every skill written (with full code inline), and turn boundaries.
+
+```
+=== 2026-05-10T21:14:00.000Z TestPlayer: "craft me a fishing rod" ===
+[turn] step 1  searchSkill({"query":"craft fishing rod"}) → no matching skills [82ms]
+[turn] step 2  lookupRecipe({"item":"fishing_rod"}) → 1x fishing_rod = 3x stick + 2x string (crafting_table) [3ms]
+[turn] step 3  writeSkill(name=craft_fishing_rod, desc="...", code=412 chars) → saved + test-invoked successfully [1924ms]
+[skill] craft_fishing_rod: WRITTEN + VERIFIED in 1924ms
+  desc: Open a crafting table within 16 blocks and craft 1 fishing_rod from 3 sticks + 2 string.
+  file: /…/data/skills/craft_fishing_rod.js
+  code:
+    const tableId = bot.registry.blocksByName.crafting_table.id;
+    const table = bot.findBlock({ matching: tableId, maxDistance: 16 });
+    …
+[end] 4 steps; skills this turn: craft_fishing_rod=ok
+```
+
+**4. The persistent skill library** at `data/memory.db` — survives bot restarts. Skills written today are retrievable next session via `searchSkill`.
+
+```bash
+sqlite3 data/memory.db "SELECT name, verified, success_count, failure_count FROM skills ORDER BY ts DESC;"
+```
+
 ## Project layout
 
 ```

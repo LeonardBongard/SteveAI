@@ -21,6 +21,7 @@ import { healthCheck, config as llmConfig } from './llm/ollama.js';
 import { openMemoryStore, closeMemoryStore } from './memory/store.js';
 import { loadKnowledge } from './knowledge/index.js';
 import { handlePlayerChat } from './planner.js';
+import { startSession } from './observability.js';
 
 // --- Config ---
 
@@ -52,6 +53,11 @@ async function main(): Promise<void> {
   // supported. See docs/COMPANION_V2_DIRECTION.md §3.4.
   const kbVersion = MC_VERSION ?? '1.21.11';
   loadKnowledge(kbVersion);
+
+  // Start a transcript file for live observability. Every tool call,
+  // every skill written, every player turn is appended.
+  const transcriptPath = startSession();
+  logs.bot.info({ transcript: transcriptPath }, '[live] tail this file to watch tool calls + skill writes');
 
   const bot = mineflayer.createBot({
     host: MC_HOST,

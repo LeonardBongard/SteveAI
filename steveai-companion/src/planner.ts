@@ -33,6 +33,7 @@ import { episodic } from './memory/episodic.js';
 import { skills, VerifiedSkillExistsError } from './skills/library.js';
 import { runSkillBody, runOnceCode, checkSkillSyntax } from './skills/sandbox.js';
 import { lintSkillCode } from './skills/lint.js';
+import { dumpSkillToDisk, appendTranscript } from './observability.js';
 import {
   lookupRecipe,
   lookupMob,
@@ -139,9 +140,36 @@ const HANDLERS: Record<ToolName, Handler> = {
     if (testResult.ok) {
       skills.markVerified(saved.name);
       skills.recordSuccess(saved.name);
+      const filePath = dumpSkillToDisk({
+        name: saved.name,
+        description: args.description,
+        code: args.code,
+        verified: true,
+        successCount: 1,
+        failureCount: 0,
+      });
+      logs.act.info({ skill: saved.name, file: filePath, verified: true }, 'wrote skill (verified)');
+      appendTranscript(
+        `[skill] ${saved.name}: WRITTEN + VERIFIED in ${testResult.durationMs}ms\n  desc: ${args.description}\n  file: ${filePath}\n  code:\n${indentLines(args.code, '    ')}`
+      );
       return `saved + test-invoked "${saved.name}" successfully in ${testResult.durationMs}ms.${warnsTxt} Marked verified.`;
     }
     skills.recordFailure(saved.name, testResult.error ?? '');
+    const filePath = dumpSkillToDisk({
+      name: saved.name,
+      description: args.description,
+      code: args.code,
+      verified: false,
+      successCount: 0,
+      failureCount: 1,
+    });
+    logs.act.warn(
+      { skill: saved.name, file: filePath, error: testResult.error },
+      'wrote skill (auto-test failed; unverified)'
+    );
+    appendTranscript(
+      `[skill] ${saved.name}: WRITTEN but auto-test failed: ${testResult.error}\n  file: ${filePath}\n  code:\n${indentLines(args.code, '    ')}`
+    );
     return `saved "${saved.name}" but auto-test failed: ${testResult.error ?? 'unknown error'}.${warnsTxt} The skill is unverified — patch it (writeSkill same name) and try again.`;
   },
 
@@ -303,6 +331,7 @@ export async function handlePlayerChat(
   const turnStartedAt = Date.now();
   const hooks = options.hooks ?? {};
   logs.plan.info({ speaker: speakerName, message }, 'turn start');
+  appendTranscript(`\n=== ${new Date().toISOString()} ${speakerName}: "${message}" ===`);
 
   await conversation.recordTurn(`player:${speakerName}`, message);
 
@@ -355,6 +384,16 @@ export async function handlePlayerChat(
       const observation = await dispatch(call.name, call.args, ctx, state);
       const callDuration = Date.now() - callStart;
       trace.push(`${call.name}: ${shortDesc(observation)}`);
+
+      // Live-testing observability: per-tool-call info log + transcript line.
+      const argsSummary = summarizeArgs(call.name, call.args);
+      const obsSummary = shortDesc(observation);
+      logs.act.info(
+        { tool: call.name, ms: callDuration },
+        `${call.name}(${argsSummary}) → ${obsSummary}`
+      );
+      appendTranscript(`[turn] step ${stepIdx + 1}  ${call.name}(${argsSummary}) → ${obsSummary} [${callDuration}ms]`);
+
       hooks.onToolCall?.({
         step: stepIdx + 1,
         tool: call.name,
@@ -378,6 +417,9 @@ export async function handlePlayerChat(
   logs.plan.info(
     { speaker: speakerName, steps: stepIdx, captured: state.capturedThisTurn, skills: state.skillLog },
     'turn end'
+  );
+  appendTranscript(
+    `[end] ${stepIdx} steps; skills this turn: ${state.skillLog.length === 0 ? '(none)' : state.skillLog.map((s) => `${s.name}=${s.ok ? 'ok' : 'fail'}`).join(', ')}`
   );
 
   return resultOf(stepIdx, stepIdx >= MAX_TOOL_STEPS_PER_INTENT, state, trace, lastAssistant, turnStartedAt);
@@ -573,6 +615,38 @@ function safeSay(bot: Bot, text: string): void {
 function shortDesc(s: string): string {
   const trimmed = s.trim();
   return trimmed.length > 120 ? trimmed.slice(0, 117) + '...' : trimmed;
+}
+
+/** Compact one-line summary of tool args for live logs. Avoids dumping
+ * 500-character JS code into a single log line — that's saved separately. */
+function summarizeArgs(toolName: string, rawArgs: unknown): string {
+  if (!rawArgs || typeof rawArgs !== 'object') return '';
+  const a = rawArgs as Record<string, unknown>;
+  // Skill code is huge; show only the name + description for write/runOnce.
+  if (toolName === 'writeSkill') {
+    const name = typeof a.name === 'string' ? a.name : '?';
+    const desc = typeof a.description === 'string' ? a.description : '';
+    const codeLen = typeof a.code === 'string' ? a.code.length : 0;
+    return `name=${name}, desc="${desc.slice(0, 60)}${desc.length > 60 ? '…' : ''}", code=${codeLen} chars`;
+  }
+  if (toolName === 'runOnce') {
+    const codeLen = typeof a.code === 'string' ? a.code.length : 0;
+    return `code=${codeLen} chars`;
+  }
+  // Default: short JSON, capped.
+  try {
+    const json = JSON.stringify(a);
+    return json.length > 100 ? json.slice(0, 97) + '…' : json;
+  } catch {
+    return '[?]';
+  }
+}
+
+function indentLines(s: string, indent: string): string {
+  return s
+    .split('\n')
+    .map((l) => indent + l)
+    .join('\n');
 }
 
 function truncate(s: string, n: number): string {
