@@ -74,8 +74,15 @@ export class ConversationMemory {
 
   /**
    * Top-K turns by embedding similarity, EXCLUDING the most-recent windowSize
-   * turns (those already shown to the LLM in window()). Returns nothing if
-   * the embed call fails.
+   * turns (those already shown to the LLM in window()).
+   *
+   * IMPORTANT: only surfaces PLAYER turns. The bot's own past replies are
+   * never resurfaced via retrieval — they don't carry durable signal, and
+   * older wrong answers (e.g. pre-RAG-fix "I need a crafting table" replies)
+   * actively poisoned subsequent sessions by retrieval-surfacing as
+   * "relevant earlier exchanges". The player's past statements ARE durable
+   * signal (preferences, goals, corrections) and are kept.
+   * Steve's own recent replies still live in the sliding window().
    */
   async retrieveSimilar(
     query: string,
@@ -110,7 +117,9 @@ export class ConversationMemory {
       .prepare<[number, Buffer, number], ConversationTurn>(
         `SELECT id, ts, speaker, message
          FROM conversation
-         WHERE embedding IS NOT NULL AND id <= ?
+         WHERE embedding IS NOT NULL
+           AND id <= ?
+           AND speaker LIKE 'player:%'
          ORDER BY vec_distance_cosine(embedding, ?) ASC
          LIMIT ?`
       )
