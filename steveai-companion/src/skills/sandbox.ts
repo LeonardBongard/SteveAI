@@ -107,3 +107,28 @@ export async function runOnceCode(
 ): Promise<RunSkillResult> {
   return runSkillBody(code, bot, {}, timeoutMs);
 }
+
+/**
+ * Static syntax check: does this code parse as the body of an async function?
+ * Per robustness P1: catches SyntaxError BEFORE the skill goes into the
+ * library. The LLM gets the parse error in the same turn and can patch.
+ *
+ * Returns null if the code is parseable, or a short error string if not.
+ */
+export function checkSkillSyntax(code: string): string | null {
+  // Wrap exactly as runSkillBody will. Use vm.compileFunction so we don't
+  // execute anything — pure syntax validation.
+  try {
+    vm.compileFunction(`(async (bot, args) => {\n${code}\n});`, [], {
+      parsingContext: vm.createContext({}),
+    });
+    return null;
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      // Strip "SyntaxError: " prefix; first line only.
+      const msg = err.message.split('\n')[0]?.trim() ?? err.message;
+      return msg;
+    }
+    return err instanceof Error ? err.message : String(err);
+  }
+}

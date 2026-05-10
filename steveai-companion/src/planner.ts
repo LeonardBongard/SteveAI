@@ -30,8 +30,9 @@ import { SYSTEM_PROMPT } from './llm/prompt.js';
 import { isKnownTool, parseToolArgs, type ToolName } from './llm/tools.js';
 import { conversation } from './memory/conversation.js';
 import { episodic } from './memory/episodic.js';
-import { skills } from './skills/library.js';
-import { runSkillBody, runOnceCode } from './skills/sandbox.js';
+import { skills, VerifiedSkillExistsError } from './skills/library.js';
+import { runSkillBody, runOnceCode, checkSkillSyntax } from './skills/sandbox.js';
+import { lintSkillCode } from './skills/lint.js';
 import {
   lookupRecipe,
   lookupMob,
@@ -102,15 +103,46 @@ const HANDLERS: Record<ToolName, Handler> = {
   },
 
   // --- Skills ---
-  writeSkill: async (a, _ctx, state) => {
+  // writeSkill: P1 syntax pre-check → P6 await-lint → P5 refuse overwrite of
+  // verified skills → save → P2 immediate auto-test → on success, mark
+  // verified. Failures flow back as DEPS observations on the same turn.
+  writeSkill: async (a, { bot }, state) => {
     const args = parseToolArgs('writeSkill', a);
-    try {
-      const skill = await skills.save(args.name, args.description, args.code);
-      state.capturedThisTurn = true;
-      return `saved skill "${skill.name}" (${args.code.length} chars). invoke it to run.`;
-    } catch (err) {
-      return `failed: writeSkill: ${(err as Error).message}`;
+
+    // P1: syntax pre-check before any persistence.
+    const syntaxErr = checkSkillSyntax(args.code);
+    if (syntaxErr) {
+      return `failed: writeSkill: code does not parse — ${syntaxErr}. Fix the syntax and retry.`;
     }
+
+    // P6: await-lint warnings (advisory, not blocking).
+    const { warnings } = lintSkillCode(args.code);
+
+    // P5: save (refuses overwrite of verified skills).
+    let saved;
+    try {
+      saved = await skills.save(args.name, args.description, args.code);
+      state.capturedThisTurn = true;
+    } catch (err) {
+      if (err instanceof VerifiedSkillExistsError) {
+        return `failed: writeSkill: ${err.message}`;
+      }
+      return `failed: writeSkill: ${cleanErrorMessage(err)}`;
+    }
+
+    // P2: auto-test the new skill once. The LLM will write skills with
+    // empty-args contracts most of the time; arg-required skills can still
+    // be invoked with args afterward. Auto-test result becomes part of the
+    // observation either way.
+    const testResult = await runSkillBody(args.code, bot, {});
+    const warnsTxt = warnings.length > 0 ? ` warnings: ${warnings.join(' | ')};` : '';
+    if (testResult.ok) {
+      skills.markVerified(saved.name);
+      skills.recordSuccess(saved.name);
+      return `saved + test-invoked "${saved.name}" successfully in ${testResult.durationMs}ms.${warnsTxt} Marked verified.`;
+    }
+    skills.recordFailure(saved.name, testResult.error ?? '');
+    return `saved "${saved.name}" but auto-test failed: ${testResult.error ?? 'unknown error'}.${warnsTxt} The skill is unverified — patch it (writeSkill same name) and try again.`;
   },
 
   invokeSkill: async (a, { bot }, state) => {
@@ -120,6 +152,9 @@ const HANDLERS: Record<ToolName, Handler> = {
     const result = await runSkillBody(skill.code, bot, args.args ?? {});
     if (result.ok) {
       skills.recordSuccess(skill.name);
+      // P5: a skill that runs successfully when explicitly invoked also
+      // becomes verified. (Useful for skills that needed args to test.)
+      skills.markVerified(skill.name);
       state.skillLog.push({ name: skill.name, ok: true });
       const valueStr = result.value === undefined ? '' : ` returned ${formatValue(result.value)}`;
       return `invoked ${skill.name} ok in ${result.durationMs}ms${valueStr}`;
@@ -134,12 +169,18 @@ const HANDLERS: Record<ToolName, Handler> = {
     const hits = await skills.search(args.query, args.k ?? 4);
     if (hits.length === 0) return 'no matching skills in library';
     return hits
-      .map((h) => `${h.name} (✓${h.successCount}/✗${h.failureCount}): ${h.description}`)
+      .map((h) =>
+        `${h.name} [${h.verified ? 'verified' : 'unverified'}] (✓${h.successCount}/✗${h.failureCount}): ${h.description}`
+      )
       .join('; ');
   },
 
   runOnce: async (a, { bot }) => {
     const args = parseToolArgs('runOnce', a);
+    // P1: syntax pre-check (skip persistence path; just give faster feedback).
+    const syntaxErr = checkSkillSyntax(args.code);
+    if (syntaxErr) return `failed: runOnce: code does not parse — ${syntaxErr}`;
+
     const result = await runOnceCode(args.code, bot);
     if (result.ok) {
       const valueStr = result.value === undefined ? '' : ` returned ${formatValue(result.value)}`;
@@ -496,10 +537,24 @@ async function dispatch(
   try {
     return await HANDLERS[name](rawArgs, ctx, state);
   } catch (err) {
-    const reason = (err as Error).message;
+    const reason = cleanErrorMessage(err);
     logs.act.warn({ tool: name, err: reason }, 'tool dispatch failed');
     return `failed: ${name}: ${reason}`;
   }
+}
+
+/**
+ * Strip stack traces from error messages before they hit the LLM context.
+ * gpt-oss tends to fixate on stack-frame line numbers; the message alone is
+ * enough signal for it to patch a skill. (Per direction-plan robustness P3.)
+ */
+export function cleanErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const msg = err.message ?? String(err);
+  // Take only the first line; drop trailing "at vm.js:42:7" frames if any
+  // crept in (rare since we use err.message, but defensive).
+  const firstLine = msg.split('\n')[0]?.trim() ?? '';
+  return firstLine.length > 0 ? firstLine : 'unknown error';
 }
 
 // ============================================================================

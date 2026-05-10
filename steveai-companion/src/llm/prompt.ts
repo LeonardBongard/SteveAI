@@ -60,12 +60,71 @@ You ARE responsible for awaiting async bot methods (bot.dig, bot.placeBlock,
 bot.pathfinder.goto, etc.). Throw on failure — the planner will see the error
 on the next turn and let you patch.
 
-Example skill body (mining one oak log):
+## Mineflayer cheat-sheet — copy these patterns; common API mistakes are listed
+
+# Mining a block (with null-check + await)
 
   const log = bot.findBlock({ matching: bot.registry.blocksByName.oak_log.id, maxDistance: 32 });
   if (!log) throw new Error('no oak_log within 32 blocks');
   await bot.pathfinder.goto(new goals.GoalGetToBlock(log.position.x, log.position.y, log.position.z));
   await bot.dig(log);
+
+# Crafting (correct shape — needs a Recipe object, NOT a string name)
+
+  const itemId = bot.registry.itemsByName.fishing_rod.id;
+  const tableId = bot.registry.blocksByName.crafting_table.id;
+  const table = bot.findBlock({ matching: tableId, maxDistance: 16 });
+  if (!table) throw new Error('no crafting_table within 16 blocks');
+  await bot.pathfinder.goto(new goals.GoalLookAtBlock(table.position, bot.world));
+  const recipes = bot.recipesFor(itemId, null, 1, table);
+  if (recipes.length === 0) throw new Error('cannot craft fishing_rod with current inventory');
+  await bot.craft(recipes[0], 1, table);
+
+  // WRONG — bot.craft does NOT accept a string name. This will throw.
+  //   await bot.craft('fishing_rod', 1, table);
+
+# Pathfinder with explicit timeout (P7 — never let a goto hang for 30s)
+
+  const goalNear = new goals.GoalNear(x, y, z, 1);
+  await Promise.race([
+    bot.pathfinder.goto(goalNear),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('path timeout 8s')), 8000)),
+  ]);
+
+# Equipping + placing a block
+
+  const dirt = bot.inventory.items().find((i) => i.name === 'dirt');
+  if (!dirt) throw new Error('no dirt in inventory');
+  await bot.equip(dirt, 'hand');
+  const ref = bot.blockAt(new Vec3(x, y - 1, z));
+  if (!ref || ref.name === 'air') throw new Error('no surface to place against');
+  await bot.placeBlock(ref, new Vec3(0, 1, 0));
+
+# Attacking a mob
+
+  const me = bot.entity.position;
+  const targets = Object.values(bot.entities).filter((e) =>
+    e.name === 'spider' && e.position && e.position.distanceTo(me) < 16
+  );
+  if (targets.length === 0) throw new Error('no spider in range');
+  const target = targets[0];
+  await bot.lookAt(target.position.offset(0, target.height ?? 1, 0));
+  await bot.attack(target);
+
+## API gotchas (these are real failure modes I have seen in this project)
+
+- bot.findBlock returns NULL if nothing matches. Always null-check before
+  using .position.
+- bot.dig / bot.placeBlock / bot.equip / bot.attack / bot.craft / bot.lookAt /
+  bot.useOn / bot.activateBlock / bot.pathfinder.goto are ALL async. Always
+  await them. Forgetting await silently completes the skill before the action
+  finishes — looks like success but the world didn't change.
+- bot.inventory.items is a METHOD, not a property: use bot.inventory.items()
+  with parentheses.
+- bot.craft requires a Recipe OBJECT from bot.recipesFor(itemId, ...).
+  Strings will not work.
+- new Vec3(x, y, z) is the constructor; addition is .offset(dx, dy, dz),
+  NOT the + operator (JS doesn't overload arithmetic on objects).
 
 # Workflow rules (follow these for every player request)
 
