@@ -32,7 +32,7 @@ import { conversation } from './memory/conversation.js';
 import { episodic } from './memory/episodic.js';
 import { skills, VerifiedSkillExistsError } from './skills/library.js';
 import { runSkillBody, runOnceCode, checkSkillSyntax } from './skills/sandbox.js';
-import { lintSkillCode } from './skills/lint.js';
+import { lintSkillCode, lintRegistryReferences } from './skills/lint.js';
 import { dumpSkillToDisk, appendTranscript } from './observability.js';
 import {
   lookupRecipe,
@@ -40,6 +40,9 @@ import {
   lookupBlock,
   findRecipesContaining,
   findMobsDropping,
+  isKnownItem,
+  isKnownBlock,
+  suggestSimilar,
 } from './knowledge/index.js';
 import { resolveSpatialReference } from './grounding/reference.js';
 import { confirmAndAct } from './grounding/confirm.js';
@@ -126,6 +129,23 @@ const HANDLERS: Record<ToolName, Handler> = {
     const syntaxErr = checkSkillSyntax(args.code);
     if (syntaxErr) {
       return `failed: writeSkill: code does not parse — ${syntaxErr}. Fix the syntax and retry.`;
+    }
+
+    // Registry-ref check: catch typos like `bot.registry.itemsByName.oak_plank`
+    // (which should be `oak_planks`) before the auto-test produces an
+    // unhelpful "Cannot read properties of undefined" error. Hard block —
+    // a bad registry name will always fail at runtime.
+    const regCheck = lintRegistryReferences(args.code, {
+      isKnownItem,
+      isKnownBlock,
+      suggestSimilar,
+    });
+    if (regCheck.errors.length > 0) {
+      const msgs = regCheck.errors.map((e) => {
+        const sug = e.suggestion ? ` Did you mean "${e.suggestion}"?` : '';
+        return `bot.registry.${e.kind}sByName.${e.name} — "${e.name}" is not a known ${e.kind} in MC ${process.env.MC_VERSION ?? '1.21.11'}.${sug}`;
+      });
+      return `failed: writeSkill: unknown ${regCheck.errors.length === 1 ? 'name' : 'names'} in registry references: ${msgs.join(' | ')}. Use lookupRecipe / lookupBlock to confirm the canonical name.`;
     }
 
     // P6: await-lint warnings (advisory, not blocking).

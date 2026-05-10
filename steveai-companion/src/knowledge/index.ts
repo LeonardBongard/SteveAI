@@ -52,6 +52,9 @@ interface KnowledgeBase {
   mobsByName: Map<string, MobView>;
   mobsDropping: Map<string, MobView[]>; // dropped item → mobs that drop it
   blocksByName: Map<string, BlockView>;
+  /** Set of canonical item names known to the connected MC version. Used for
+   *  skill-code lint to catch typo'd `bot.registry.itemsByName.X` references. */
+  itemNames: Set<string>;
 }
 
 let kb: KnowledgeBase | null = null;
@@ -69,6 +72,7 @@ export function loadKnowledge(version = '1.21.11'): KnowledgeBase {
   const mobsByName = new Map<string, MobView>();
   const mobsDropping = new Map<string, MobView[]>();
   const blocksByName = new Map<string, BlockView>();
+  const itemNames = new Set<string>();
 
   // --- Recipes (crafting + smelting) ---
   buildRecipeIndex(md, recipesByItem, recipesUsing);
@@ -79,7 +83,12 @@ export function loadKnowledge(version = '1.21.11'): KnowledgeBase {
   // --- Blocks ---
   buildBlockIndex(md, blocksByName);
 
-  kb = { version, recipesByItem, recipesUsing, mobsByName, mobsDropping, blocksByName };
+  // --- Item registry (names only — used for skill-code lint) ---
+  for (const item of md.itemsArray ?? []) {
+    if (item?.name) itemNames.add(item.name);
+  }
+
+  kb = { version, recipesByItem, recipesUsing, mobsByName, mobsDropping, blocksByName, itemNames };
   logs.bot.info(
     {
       mcVersion: version,
@@ -114,6 +123,50 @@ export function findRecipesContaining(ingredientName: string): RecipeView[] {
 
 export function findMobsDropping(itemName: string): MobView[] {
   return getKb().mobsDropping.get(canon(itemName)) ?? [];
+}
+
+// ============================================================================
+// Registry validation (used by skill-code lint at writeSkill time)
+// ============================================================================
+
+export function isKnownItem(name: string): boolean {
+  return getKb().itemNames.has(canon(name));
+}
+
+export function isKnownBlock(name: string): boolean {
+  return getKb().blocksByName.has(canon(name));
+}
+
+/**
+ * Suggest a similar known name when the LLM hallucinates an identifier
+ * (most commonly singular-vs-plural — e.g. `oak_plank` when it should be
+ * `oak_planks`). Tries simple toggles first, then a top-3 prefix search.
+ * Returns null if no plausible suggestion.
+ */
+export function suggestSimilar(name: string, kind: 'item' | 'block'): string | null {
+  const c = canon(name);
+  const pool = kind === 'item' ? getKb().itemNames : new Set(getKb().blocksByName.keys());
+
+  // 1. Plural toggle: foo → foos, foos → foo, foe → foes/foeses (etc.)
+  const toggles = [c + 's', c + 'es'];
+  if (c.endsWith('s')) toggles.push(c.slice(0, -1));
+  if (c.endsWith('es')) toggles.push(c.slice(0, -2));
+  for (const t of toggles) {
+    if (pool.has(t)) return t;
+  }
+
+  // 2. Prefix overlap (≥4-char common prefix) — catches things like
+  //    "wooden_plank" → "wooden_planks", "oak_wood" → "oak_log" etc.
+  const minPrefix = Math.min(c.length - 1, 4);
+  const candidates: string[] = [];
+  for (const cand of pool) {
+    if (cand.length < minPrefix) continue;
+    if (cand.startsWith(c.slice(0, minPrefix)) || c.startsWith(cand.slice(0, minPrefix))) {
+      candidates.push(cand);
+    }
+  }
+  candidates.sort((a, b) => Math.abs(a.length - c.length) - Math.abs(b.length - c.length));
+  return candidates[0] ?? null;
 }
 
 // ============================================================================

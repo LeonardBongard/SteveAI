@@ -1,14 +1,18 @@
-// Static lint over skill code — catches the silent-bug failure mode where
-// the LLM forgets `await` on async Mineflayer methods.
+// Static lint over skill code. Two passes:
 //
-// Per docs/COMPANION_V2_DIRECTION.md robustness P6. Without this, a missing
-// `await bot.dig(block)` returns a Promise immediately, the skill's wrapper
-// resolves "ok," but no block was actually mined. Player thinks Steve
-// worked. We catch this statically before execution.
+// 1. await-lint: catches the silent-bug failure mode where the LLM forgets
+//    `await` on async Mineflayer methods (P6).
+// 2. registry-ref check: catches the LLM hallucinating item/block names
+//    in `bot.registry.itemsByName.X` / `bot.registry.blocksByName.X`. The
+//    runtime would otherwise throw a generic `Cannot read properties of
+//    undefined (reading 'id')` and the LLM has no idea which name was bad.
+//    With this check, the LLM gets "oak_plank is not a real item — did you
+//    mean oak_planks?" up front.
 //
 // We use string scanning instead of full AST parsing — sufficient for the
 // common failure mode and avoids pulling in acorn directly. False positives
-// are surfaced as warnings, not errors; they don't block save.
+// (warnings) don't block save; registry-ref MISSES are hard errors that
+// block save so the bad name doesn't leak into the library.
 
 const ASYNC_METHODS: ReadonlyArray<string | RegExp> = [
   'dig',
@@ -33,6 +37,37 @@ const ASYNC_METHODS: ReadonlyArray<string | RegExp> = [
 
 export interface LintResult {
   warnings: string[];
+}
+
+export interface RegistryLintResult {
+  /** Each entry is a typo'd name (X) the code referenced in registry. */
+  errors: Array<{ kind: 'item' | 'block'; name: string; suggestion: string | null }>;
+}
+
+/**
+ * Check every `bot.registry.itemsByName.X` / `bot.registry.blocksByName.X`
+ * reference against the loaded Minecraft-knowledge base. Returns the set
+ * of unknown names with suggested corrections. The planner blocks save
+ * if any errors come back.
+ */
+export function lintRegistryReferences(
+  code: string,
+  knows: { isKnownItem: (n: string) => boolean; isKnownBlock: (n: string) => boolean; suggestSimilar: (n: string, k: 'item' | 'block') => string | null }
+): RegistryLintResult {
+  const errors: RegistryLintResult['errors'] = [];
+
+  for (const m of code.matchAll(/\bbot\.registry\.itemsByName\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    const name = m[1];
+    if (!name || knows.isKnownItem(name)) continue;
+    errors.push({ kind: 'item', name, suggestion: knows.suggestSimilar(name, 'item') });
+  }
+  for (const m of code.matchAll(/\bbot\.registry\.blocksByName\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    const name = m[1];
+    if (!name || knows.isKnownBlock(name)) continue;
+    errors.push({ kind: 'block', name, suggestion: knows.suggestSimilar(name, 'block') });
+  }
+
+  return { errors };
 }
 
 /** Lint a skill body (the same code that goes into the sandbox). */
