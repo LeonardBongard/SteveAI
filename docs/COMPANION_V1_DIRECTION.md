@@ -1,5 +1,7 @@
 # SteveAI Companion v1 — Direction Plan
 
+> **⚠️ Superseded by [COMPANION_V2_DIRECTION.md](COMPANION_V2_DIRECTION.md) for §§3.3, 3.5 (parts), and 6.** The pre-wrapped action tools and "no Voyager-style code-gen" decision were walked back after the v1 eval surfaced the capability ceiling problem. v2 pivots to runtime LLM code-generation (Voyager pattern) + a Minecraft-knowledge RAG. Everything else in this document — substrate, hardware budget, memory model, grounding model, eval harness — still applies.
+
 > **What this document is.** A high-level statement of *what* we are building and *why*, with every concrete dependency named. It is intentionally not a timeline, sprint breakdown, or task list — that comes in a follow-up implementation plan. If a question reads "when do we do X" it does not belong here.
 
 > **What this document is for.** So that when someone (us, future-us, a collaborator) sits down to build, every architectural choice is already justified, every download is named, and the end state is unambiguous.

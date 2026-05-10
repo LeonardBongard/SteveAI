@@ -6,9 +6,10 @@ This repo is in transition. The original Forge mod has been archived; the active
 
 ## What's where
 
-- **[steveai-companion/](steveai-companion/)** — the active project. Mineflayer + Ollama + `gpt-oss:20b`, persistent memory + spatial grounding (Phase 1 scaffolded; phases 2–3 ahead).
+- **[steveai-companion/](steveai-companion/)** — the active project. Mineflayer + Ollama + `gpt-oss:20b`. v1 (memory + grounding + planner + 5/5 eval scenarios passing) is shipped; v2 pivot (Voyager-style code-gen + RAG) is the next implementation.
 - **[docs/](docs/)** — current direction:
-  - [docs/COMPANION_V1_DIRECTION.md](docs/COMPANION_V1_DIRECTION.md) — the v1 plan (what we're building, dependencies, end-state, the ledger of "80% trades")
+  - [docs/COMPANION_V2_DIRECTION.md](docs/COMPANION_V2_DIRECTION.md) — **canonical direction** (v2). Voyager-style runtime code generation + Minecraft-knowledge RAG. Read this for what we're building next.
+  - [docs/COMPANION_V1_DIRECTION.md](docs/COMPANION_V1_DIRECTION.md) — v1 plan (superseded; kept as record of the path). Substrate / memory / eval-harness sections still apply to v2.
   - [docs/MINECRAFT_AI_RESEARCH_SURVEY.md](docs/MINECRAFT_AI_RESEARCH_SURVEY.md) — landscape survey of Minecraft-AI work 2023–2026 with citations
   - [docs/RESTRUCTURE_PLAN.md](docs/RESTRUCTURE_PLAN.md) — the execution plan for the Forge → Mineflayer transition
   - [docs/LOGGING_POLICY.md](docs/LOGGING_POLICY.md), [docs/MODULARITY_RULES.md](docs/MODULARITY_RULES.md) — cross-cutting principles (Forge-era; needs adapting for the Node companion as a follow-up)
