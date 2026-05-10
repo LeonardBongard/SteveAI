@@ -1,0 +1,186 @@
+package com.steve.ai.memory;
+
+import com.steve.ai.entity.SteveEntity;
+import com.steve.ai.memory.VisibleBlockEntry;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+public class WorldKnowledge {
+    private final SteveEntity steve;
+    private final int scanRadius = 16;
+    private static final int MAX_VISIBLE_BLOCKS = 64;
+    private Map<Block, Integer> nearbyBlocks;
+    private List<Entity> nearbyEntities;
+    private String biomeName;
+
+    public WorldKnowledge(SteveEntity steve) {
+        this.steve = steve;
+        scan();
+    }
+
+    private void scan() {
+        scanBiome();
+        scanBlocks();
+        scanEntities();
+    }
+
+    private void scanBiome() {
+        Level level = steve.level();
+        BlockPos pos = steve.blockPosition();
+        
+        Biome biome = level.getBiome(pos).value();
+        var biomeRegistry = level.registryAccess().lookupOrThrow(Registries.BIOME);
+        var biomeKey = biomeRegistry.getKey(biome);
+        
+        if (biomeKey != null) {
+            biomeName = biomeKey.getPath();
+        } else {
+            biomeName = "unknown";
+        }
+    }
+
+    private void scanBlocks() {
+        nearbyBlocks = new HashMap<>();
+        List<VisibleBlock> visibleBlocks = new ArrayList<>();
+        Level level = steve.level();
+        BlockPos stevePos = steve.blockPosition();
+        long tick = level.getGameTime();
+
+        List<VisibleBlockEntry> perceptionEntries = steve.getMemory().getVisibleBlocks();
+        if (!perceptionEntries.isEmpty()) {
+            for (VisibleBlockEntry entry : perceptionEntries) {
+                Identifier id = Identifier.tryParse(entry.blockId());
+                Block block = id == null ? Blocks.AIR : BuiltInRegistries.BLOCK.getOptional(id).orElse(Blocks.AIR);
+                if (block == Blocks.AIR) {
+                    continue;
+                }
+                nearbyBlocks.put(block, nearbyBlocks.getOrDefault(block, 0) + 1);
+                visibleBlocks.add(new VisibleBlock(entry.blockId(), entry.position(), entry.distance(), entry.lastSeenTick()));
+            }
+            visibleBlocks.sort(Comparator.comparingDouble(VisibleBlock::distance));
+            if (visibleBlocks.size() > MAX_VISIBLE_BLOCKS) {
+                visibleBlocks = visibleBlocks.subList(0, MAX_VISIBLE_BLOCKS);
+            }
+            steve.getMemory().getPerceptionCache().updateVisibleBlocks(visibleBlocks);
+            return;
+        }
+        
+        for (int x = -scanRadius; x <= scanRadius; x += 2) {
+            for (int y = -scanRadius; y <= scanRadius; y += 2) {
+                for (int z = -scanRadius; z <= scanRadius; z += 2) {
+                    BlockPos checkPos = stevePos.offset(x, y, z);
+                    BlockState state = level.getBlockState(checkPos);
+                    Block block = state.getBlock();
+                    
+                    if (block != Blocks.AIR && block != Blocks.CAVE_AIR && block != Blocks.VOID_AIR) {
+                        nearbyBlocks.put(block, nearbyBlocks.getOrDefault(block, 0) + 1);
+                        String blockId = Optional.ofNullable(BuiltInRegistries.BLOCK.getKey(block))
+                            .map(Object::toString)
+                            .orElse("unknown");
+                        double distance = steve.position().distanceTo(net.minecraft.world.phys.Vec3.atCenterOf(checkPos));
+                        visibleBlocks.add(new VisibleBlock(blockId, checkPos, distance, tick));
+                    }
+                }
+            }
+        }
+
+        visibleBlocks.sort(Comparator.comparingDouble(VisibleBlock::distance));
+        if (visibleBlocks.size() > MAX_VISIBLE_BLOCKS) {
+            visibleBlocks = visibleBlocks.subList(0, MAX_VISIBLE_BLOCKS);
+        }
+        steve.getMemory().getPerceptionCache().updateVisibleBlocks(visibleBlocks);
+    }
+
+    private void scanEntities() {
+        Level level = steve.level();
+        AABB searchBox = steve.getBoundingBox().inflate(scanRadius);
+        nearbyEntities = level.getEntities(steve, searchBox);
+    }
+
+    public String getBiomeName() {
+        return biomeName;
+    }
+
+    public String getNearbyBlocksSummary() {
+        if (nearbyBlocks.isEmpty()) {
+            return "none";
+        }
+        
+        List<Map.Entry<Block, Integer>> sorted = nearbyBlocks.entrySet().stream()
+            .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
+            .limit(5)
+            .toList();
+        
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < sorted.size(); i++) {
+            if (i > 0) sb.append(", ");
+            Map.Entry<Block, Integer> entry = sorted.get(i);
+            sb.append(entry.getKey().getName().getString());
+        }
+        
+        return sb.toString();
+    }
+
+    public String getNearbyEntitiesSummary() {
+        if (nearbyEntities.isEmpty()) {
+            return "none";
+        }
+        
+        Map<String, Integer> entityCounts = new HashMap<>();
+        for (Entity entity : nearbyEntities) {
+            String name = entity.getType().toString();
+            entityCounts.put(name, entityCounts.getOrDefault(name, 0) + 1);
+        }
+        
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (Map.Entry<String, Integer> entry : entityCounts.entrySet()) {
+            if (count > 0) sb.append(", ");
+            sb.append(entry.getValue()).append(" ").append(entry.getKey());
+            count++;
+            if (count >= 5) break;
+        }
+        
+        return sb.toString();
+    }
+
+    public Map<Block, Integer> getNearbyBlocks() {
+        return nearbyBlocks;
+    }
+
+    public List<Entity> getNearbyEntities() {
+        return nearbyEntities;
+    }
+
+    public String getNearbyPlayerNames() {
+        List<String> playerNames = new ArrayList<>();
+        for (Entity entity : nearbyEntities) {
+            if (entity instanceof Player player) {
+                playerNames.add(player.getName().getString());
+            }
+        }
+        
+        if (playerNames.isEmpty()) {
+            return "none";
+        }
+        
+        return String.join(", ", playerNames);
+    }
+}

@@ -1,0 +1,63 @@
+package com.steve.ai.event;
+
+import com.steve.ai.SteveMod;
+import com.steve.ai.entity.SteveEntity;
+import com.steve.ai.entity.SteveManager;
+import com.steve.ai.memory.StructureRegistry;
+import com.steve.ai.network.DebugUiTracker;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.event.entity.player.PlayerEvent;
+
+public class ServerEventHandler {
+    private static boolean stevesSpawned = false;
+
+    public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) {
+            ServerLevel level = (ServerLevel) player.level();
+            SteveManager manager = SteveMod.getSteveManager();
+            if (!stevesSpawned) {
+                manager.clearAllSteves();
+
+                // Clear structure registry for fresh spatial awareness
+                StructureRegistry.clear();
+
+                // Then, remove ALL SteveEntity instances from the world (including ones loaded from NBT)
+                for (var entity : level.getAllEntities()) {
+                    if (entity instanceof SteveEntity) {
+                        entity.discard();
+                    }
+                }
+
+                Vec3 playerPos = player.position();
+                Vec3 lookVec = player.getLookAngle();
+
+                String[] names = {"Steve", "Alex"};
+
+                for (int i = 0; i < names.length; i++) {
+                    double offsetX = lookVec.x * 5 + (lookVec.z * (i - 1.5) * 2);
+                    double offsetZ = lookVec.z * 5 + (-lookVec.x * (i - 1.5) * 2);
+
+                    Vec3 spawnPos = new Vec3(
+                        playerPos.x + offsetX,
+                        playerPos.y,
+                        playerPos.z + offsetZ
+                    );
+
+                    SteveEntity steve = manager.spawnSteve(level, spawnPos, names[i]);
+                    if (steve != null) {
+                        // spawned successfully
+                    }
+                }
+
+                stevesSpawned = true;
+            }
+        }
+    }
+
+    public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        stevesSpawned = false;
+        DebugUiTracker.remove(event.getEntity().getUUID());
+    }
+}

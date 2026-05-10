@@ -1,48 +1,48 @@
-brain.md
+# Project-wide gitignore. Per-subdirectory .gitignore files (e.g.
+# steveai-companion/.gitignore) handle their own subtrees.
 
-# Build
-build/
-.gradle/
-bin/
-out/
-
-# IDE
+# Editor / OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
 .idea/
 *.iml
 .vscode/
 *.code-workspace
 
-# Minecraft
-run/
-logs/
+# Local notes / scratch
+brain.md
+*.local.md
+temp_memory_chatgpt.txt
 
-# Config with API keys
+# Forge runtime config (kept at repo root; contains API keys)
 config/steve-common.toml
 run/config/steve-common.toml
 
-# Local scratch notes
-temp_memory_chatgpt.txt
+# Defensive: Node outputs at the root (active project lives in
+# steveai-companion/ which has its own .gitignore).
+node_modules/
+dist/
 
-# Media files (large binaries)
+# Defensive: Forge / Gradle outputs in case they regenerate at the root.
+# (Active Forge sources live under legacy/forge-mod/ now.)
+bin/
+build/
+.gradle/
+out/
+mcmodsrepo/
+generated/
+reports/
+logs/
+run/
+jdk-17.0.2.jdk/
+
+# Misc
+*.log
 *.mp4
 *.mov
 *.avi
 *.webm
-
-# Structure files (if regenerable)
 *.nbt
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# Windows
-Thumbs.db
-Desktop.ini
-
-# Misc
-*.log
-
-# JDK
-jdk-17.0.2.jdk/

@@ -1,0 +1,865 @@
+package com.steve.ai.client;
+
+import com.steve.ai.SteveMod;
+import com.steve.ai.config.SteveConfig;
+import com.steve.ai.entity.SteveEntity;
+import com.steve.ai.network.SteveNetwork;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.resources.Identifier;
+import net.minecraft.network.chat.Component;
+import net.minecraft.core.BlockPos;
+import net.minecraftforge.client.event.AddGuiOverlayLayersEvent;
+import net.minecraftforge.client.gui.overlay.ForgeLayeredDraw;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Side-mounted GUI panel for Steve agent interaction.
+ * Inspired by Cursor's composer - slides in/out from the right side.
+ * Now with scrollable message history!
+ */
+public class SteveGUI {
+    private static final int PANEL_WIDTH = 200;
+    private static final int PANEL_PADDING = 6;
+    private static final int ANIMATION_SPEED = 20;
+    private static final int MESSAGE_HEIGHT = 12;
+    private static final int MAX_MESSAGES = 500;
+    private static final int HEADER_BUTTON_WIDTH = 54;
+    private static final int HEADER_BUTTON_HEIGHT = 14;
+    
+    private static boolean isOpen = false;
+    private static float slideOffset = PANEL_WIDTH; // Start fully hidden
+    private static EditBox inputBox;
+    private static List<String> commandHistory = new ArrayList<>();
+    private static int historyIndex = -1;
+    
+    // Message history and scrolling
+    private static List<ChatMessage> messages = new ArrayList<>();
+    private static int scrollOffset = 0;
+    private static int maxScroll = 0;
+    private static final int BACKGROUND_COLOR = 0x15202020; // Ultra transparent (15 = ~8% opacity)
+    private static final int BORDER_COLOR = 0x40404040; // More transparent border
+    private static final int HEADER_COLOR = 0x25252525; // More transparent header (~15% opacity)
+    private static final int TEXT_COLOR = 0xFFFFFFFF;
+    
+    // Message bubble colors
+    private static final int USER_BUBBLE_COLOR = 0xC04CAF50; // Green bubble for user
+    private static final int STEVE_BUBBLE_COLOR = 0xC02196F3; // Blue bubble for Steve
+    private static final int SYSTEM_BUBBLE_COLOR = 0xC0FF9800; // Orange bubble for system
+    private static final int DEBUG_BG_COLOR = 0xAA000000;
+    private static final int DEBUG_TEXT_COLOR = 0xFFE0E0E0;
+    private static final int DEBUG_ACCENT_COLOR = 0xFF7CD2FF;
+    private static final int INVENTORY_BG = 0xAA101010;
+    private static final int INVENTORY_BORDER = 0xFF4A4A4A;
+    private static final int INVENTORY_TEXT = 0xFFEDEDED;
+    private static boolean showInventoryOverlay = false;
+    private static boolean showMemoryOverlay = false;
+
+    private static class ChatMessage {
+        String sender; // "You", "Steve", "Alex", "System", etc.
+        String text;
+        int bubbleColor;
+        boolean isUser; // true if message from user
+        
+        ChatMessage(String sender, String text, int bubbleColor, boolean isUser) {
+            this.sender = sender;
+            this.text = text;
+            this.bubbleColor = bubbleColor;
+            this.isUser = isUser;
+        }
+    }
+
+    public static void toggle() {
+        isOpen = !isOpen;
+        
+        Minecraft mc = Minecraft.getInstance();
+        SteveMod.LOGGER.info("SteveGUI.toggle -> isOpen={} screen={}", isOpen, mc.screen == null ? "null" : mc.screen.getClass().getSimpleName());
+        
+        if (isOpen) {
+            initializeInputBox();
+            mc.setScreen(new SteveOverlayScreen());
+            if (inputBox != null) {
+                inputBox.setFocused(true);
+            }
+        } else {
+            if (inputBox != null) {
+                inputBox = null;
+            }
+            if (mc.screen instanceof SteveOverlayScreen) {
+                mc.setScreen(null);
+            }
+            VisibleBlocksCache.clearAll();
+        }
+
+        if (mc.player != null) {
+            SteveNetwork.sendDebugUiState(isOpen);
+        }
+    }
+
+    public static boolean isOpen() {
+        return isOpen;
+    }
+
+    private static void initializeInputBox() {
+        Minecraft mc = Minecraft.getInstance();
+        if (inputBox == null) {
+            inputBox = new EditBox(mc.font, 0, 0, PANEL_WIDTH - 20, 20, 
+                Component.literal("Command"));
+            inputBox.setMaxLength(256);
+            inputBox.setHint(Component.literal("Tell Steve what to do..."));
+            inputBox.setFocused(true);
+        }
+    }
+
+    /**
+     * Add a message to the chat history
+     */
+    public static void addMessage(String sender, String text, int bubbleColor, boolean isUser) {
+        messages.add(new ChatMessage(sender, text, bubbleColor, isUser));
+        if (messages.size() > MAX_MESSAGES) {
+            messages.remove(0);
+        }
+        // Auto-scroll to bottom on new message
+        scrollOffset = 0;
+    }
+
+    /**
+     * Add a user command to the history
+     */
+    public static void addUserMessage(String text) {
+        addMessage("You", text, USER_BUBBLE_COLOR, true);
+    }
+
+    /**
+     * Add a Steve response to the history
+     */
+    public static void addSteveMessage(String steveName, String text) {
+        addMessage(steveName, text, STEVE_BUBBLE_COLOR, false);
+    }
+
+    /**
+     * Add a system message to the history
+     */
+    public static void addSystemMessage(String text) {
+        addMessage("System", text, SYSTEM_BUBBLE_COLOR, false);
+    }
+
+    public static void registerOverlayLayer() {
+        AddGuiOverlayLayersEvent.BUS.addListener(SteveGUI::onAddGuiOverlayLayers);
+    }
+
+    private static void onAddGuiOverlayLayers(AddGuiOverlayLayersEvent event) {
+        Identifier layerId = Identifier.fromNamespaceAndPath(SteveMod.MODID, "steve_gui");
+        event.getLayeredDraw().add(ForgeLayeredDraw.VANILLA_ROOT, layerId, SteveGUI::renderOverlay);
+    }
+
+    private static void renderOverlay(GuiGraphics graphics, DeltaTracker deltaTracker) {
+        if (showInventoryOverlay) {
+            renderInventoryOverlay(graphics);
+        }
+        if (showMemoryOverlay) {
+            renderMemoryOverlay(graphics);
+        }
+        renderPanel(graphics);
+    }
+
+    private static void renderDebugOverlay(GuiGraphics graphics) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) return;
+
+        List<SteveEntity> steves = mc.level.getEntitiesOfClass(
+            SteveEntity.class,
+            mc.player.getBoundingBox().inflate(96)
+        );
+
+        if (steves.isEmpty()) {
+            return;
+        }
+
+        List<String> lines = new ArrayList<>();
+        lines.add("Steve Debug");
+        int maxSteves = 3;
+        int count = 0;
+        for (SteveEntity steve : steves) {
+            if (count >= maxSteves) break;
+            String name = steve.getSteveName();
+            String status = steve.getDebugStatus();
+            if (status == null || status.isBlank()) {
+                status = "Idle";
+            }
+            int visibleCount = steve.getVisibleBlocksCount();
+            int scanAge = steve.getVisibleScanAge();
+            String scanAgeLabel = scanAge < 0 ? "n/a" : scanAge + "t";
+            BlockPos target = steve.getDebugTargetBlock();
+            String targetLabel = target == null ? "-" : (target.getX() + "," + target.getY() + "," + target.getZ());
+            VisibleBlocksCache.Snapshot snapshot = VisibleBlocksCache.getSnapshot(steve.getUUID());
+            lines.add(name + ": " + status);
+            if (snapshot != null) {
+                lines.add("  packetBlocks=" + snapshot.blocks().size());
+            }
+            lines.add("  visible=" + visibleCount + " scanAge=" + scanAgeLabel);
+            lines.add("  target=" + targetLabel);
+            count++;
+        }
+
+        int padding = 4;
+        int lineHeight = mc.font.lineHeight + 2;
+        int width = 0;
+        for (String line : lines) {
+            width = Math.max(width, mc.font.width(line));
+        }
+        int height = lineHeight * lines.size();
+
+        int x = 6;
+        int y = 6;
+        graphics.fill(x - padding, y - padding, x + width + padding, y + height + padding, DEBUG_BG_COLOR);
+
+        int yLine = y;
+        for (int i = 0; i < lines.size(); i++) {
+            int color = (i == 0) ? DEBUG_ACCENT_COLOR : DEBUG_TEXT_COLOR;
+            graphics.drawString(mc.font, lines.get(i), x, yLine, color);
+            yLine += lineHeight;
+        }
+    }
+
+    public static void renderPanel(GuiGraphics graphics) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return;
+        if (isOpen) {
+            SteveMod.LOGGER.debug("SteveGUI.renderPanel called (open)");
+        }
+
+        if (isOpen && slideOffset > 0) {
+            slideOffset = Math.max(0, slideOffset - ANIMATION_SPEED);
+        } else if (!isOpen && slideOffset < PANEL_WIDTH) {
+            slideOffset = Math.min(PANEL_WIDTH, slideOffset + ANIMATION_SPEED);
+        }
+
+        // Don't render if completely hidden
+        if (slideOffset >= PANEL_WIDTH) return;
+
+        int screenWidth = mc.getWindow().getGuiScaledWidth();
+        int screenHeight = mc.getWindow().getGuiScaledHeight();
+        
+        int panelX = (int) (screenWidth - PANEL_WIDTH + slideOffset);
+        int panelY = 0;
+        int panelHeight = screenHeight;
+
+        graphics.fillGradient(panelX, panelY, screenWidth, panelHeight, BACKGROUND_COLOR, BACKGROUND_COLOR);
+        
+        graphics.fillGradient(panelX - 2, panelY, panelX, panelHeight, BORDER_COLOR, BORDER_COLOR);
+
+        int headerHeight = Math.max(48, 48 + Math.min(110, estimateTaskStatusHeight(mc)));
+        graphics.fillGradient(panelX, panelY, screenWidth, headerHeight, HEADER_COLOR, HEADER_COLOR);
+        graphics.drawString(mc.font, "§lSteve AI", panelX + PANEL_PADDING, panelY + 8, TEXT_COLOR);
+        graphics.drawString(mc.font, "§7Press Esc to close", panelX + PANEL_PADDING, panelY + 20, 0xFF888888);
+        renderTeleportFocusedButton(graphics, mc, panelX, panelY);
+        renderPanelDebugStatus(graphics, panelX + PANEL_PADDING, panelY + 32);
+
+        // Message history area
+        int inputAreaY = screenHeight - 80;
+        int messageAreaTop = headerHeight + 5;
+        int messageAreaHeight = inputAreaY - messageAreaTop - 5;
+        int messageAreaBottom = messageAreaTop + messageAreaHeight;
+
+        int totalMessageHeight = 0;
+        for (ChatMessage msg : messages) {
+            int maxBubbleWidth = PANEL_WIDTH - (PANEL_PADDING * 3);
+            String wrappedText = wrapText(mc.font, msg.text, maxBubbleWidth - 10);
+            int bubbleHeight = MESSAGE_HEIGHT + 10; // bubble padding
+            totalMessageHeight += bubbleHeight + 5 + 12; // message + spacing + name
+        }
+        maxScroll = Math.max(0, totalMessageHeight - messageAreaHeight);
+        scrollOffset = Math.max(0, Math.min(scrollOffset, maxScroll));
+
+        // Render messages (scrollable)
+        int yPos = messageAreaTop + 5;
+        
+        // Clip rendering to message area
+        graphics.enableScissor(panelX, messageAreaTop, screenWidth, messageAreaBottom);
+        
+        if (messages.isEmpty()) {
+            graphics.drawString(mc.font, "§7No messages yet...", 
+                panelX + PANEL_PADDING, yPos, 0xFF666666);
+            graphics.drawString(mc.font, "§7Type a command below!", 
+                panelX + PANEL_PADDING, yPos + 12, 0xFF555555);
+        } else {
+            int currentY = messageAreaBottom - 5; // Start from bottom
+            
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                ChatMessage msg = messages.get(i);
+                
+                int maxBubbleWidth = PANEL_WIDTH - (PANEL_PADDING * 3); // Leave space on sides
+                String wrappedText = wrapText(mc.font, msg.text, maxBubbleWidth - 10);
+                int textWidth = mc.font.width(wrappedText);
+                int textHeight = MESSAGE_HEIGHT;
+                int bubbleWidth = Math.min(textWidth + 10, maxBubbleWidth);
+                int bubbleHeight = textHeight + 10;
+                
+                int msgY = currentY - bubbleHeight + scrollOffset;
+                
+                if (msgY + bubbleHeight < messageAreaTop - 20 || msgY > messageAreaBottom + 20) {
+                    currentY -= bubbleHeight + 5;
+                    continue;
+                }
+                
+                // Render message bubble based on sender
+                if (msg.isUser) {
+                    int bubbleX = screenWidth - bubbleWidth - PANEL_PADDING - 5;
+                    
+                    // Draw bubble background with gradient for alpha support
+                    graphics.fillGradient(bubbleX - 3, msgY - 3, bubbleX + bubbleWidth + 3, msgY + bubbleHeight, msg.bubbleColor, msg.bubbleColor);
+                    
+                    // Draw sender name (small, above bubble)
+                    graphics.drawString(mc.font, "§7" + msg.sender, bubbleX, msgY - 12, 0xFFCCCCCC);
+                    
+                    // Draw message text (white on colored bubble)
+                    graphics.drawString(mc.font, wrappedText, bubbleX + 5, msgY + 5, 0xFFFFFFFF);
+                    
+                } else {
+                    int bubbleX = panelX + PANEL_PADDING;
+                    
+                    // Draw bubble background with gradient for alpha support
+                    graphics.fillGradient(bubbleX - 3, msgY - 3, bubbleX + bubbleWidth + 3, msgY + bubbleHeight, msg.bubbleColor, msg.bubbleColor);
+                    
+                    // Draw sender name (small, above bubble)
+                    graphics.drawString(mc.font, "§l" + msg.sender, bubbleX, msgY - 12, TEXT_COLOR);
+                    
+                    // Draw message text (white on colored bubble)
+                    graphics.drawString(mc.font, wrappedText, bubbleX + 5, msgY + 5, 0xFFFFFFFF);
+                }
+                
+                currentY -= bubbleHeight + 5 + 12; // Extra space for sender name
+            }
+        }
+        
+        graphics.disableScissor();
+        
+        if (maxScroll > 0 && messageAreaHeight > 0) {
+            int denom = Math.max(1, maxScroll + messageAreaHeight);
+            int safeMaxScroll = Math.max(1, maxScroll);
+            int scrollBarHeight = Math.max(20, (messageAreaHeight * messageAreaHeight) / denom);
+            int scrollBarY = messageAreaTop + (int)((messageAreaHeight - scrollBarHeight) * (1.0f - (float)scrollOffset / safeMaxScroll));
+            graphics.fill(screenWidth - 4, scrollBarY, screenWidth - 2, scrollBarY + scrollBarHeight, 0xFF888888);
+        }
+
+        // Command input area (bottom) with gradient for alpha support
+        graphics.fillGradient(panelX, inputAreaY, screenWidth, screenHeight, HEADER_COLOR, HEADER_COLOR);
+        graphics.drawString(mc.font, "§7Command:", panelX + PANEL_PADDING, inputAreaY + 10, 0xFF888888);
+
+        if (inputBox != null && isOpen) {
+            inputBox.setX(panelX + PANEL_PADDING);
+            inputBox.setY(inputAreaY + 25);
+            inputBox.setWidth(PANEL_WIDTH - (PANEL_PADDING * 2));
+            inputBox.render(graphics, (int)mc.mouseHandler.xpos(), (int)mc.mouseHandler.ypos(),
+                mc.getDeltaTracker().getGameTimeDeltaPartialTick(false));
+        }
+
+        graphics.drawString(mc.font, "§8Enter: Send | ↑↓: History | Scroll: Messages", 
+            panelX + PANEL_PADDING, screenHeight - 15, 0xFF555555);
+        
+    }
+
+    /**
+     * Simple word wrap for text
+     */
+    private static String wrapText(net.minecraft.client.gui.Font font, String text, int maxWidth) {
+        if (font.width(text) <= maxWidth) {
+            return text;
+        }
+        // Simple truncation for now
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            result.append(text.charAt(i));
+            if (font.width(result.toString() + "...") >= maxWidth) {
+                return result.substring(0, result.length() - 3) + "...";
+            }
+        }
+        return result.toString();
+    }
+
+    public static boolean handleKeyPress(int keyCode, int scanCode, int modifiers) {
+        if (!isOpen || inputBox == null) return false;
+
+        Minecraft mc = Minecraft.getInstance();
+        
+        // Escape key - close panel
+        if (keyCode == 256) { // ESC
+            toggle();
+            return true;
+        }
+        
+        // Enter key - send command
+        if (keyCode == 257) {
+            String command = inputBox.getValue().trim();
+            if (!command.isEmpty()) {
+                sendCommand(command);
+                inputBox.setValue("");
+                historyIndex = -1;
+            }
+            return true;
+        }
+
+        // Arrow up - previous command
+        if (keyCode == 265 && !commandHistory.isEmpty()) { // UP
+            if (historyIndex < commandHistory.size() - 1) {
+                historyIndex++;
+                inputBox.setValue(commandHistory.get(commandHistory.size() - 1 - historyIndex));
+            }
+            return true;
+        }
+
+        // Arrow down - next command
+        if (keyCode == 264) { // DOWN
+            if (historyIndex > 0) {
+                historyIndex--;
+                inputBox.setValue(commandHistory.get(commandHistory.size() - 1 - historyIndex));
+            } else if (historyIndex == 0) {
+                historyIndex = -1;
+                inputBox.setValue("");
+            }
+            return true;
+        }
+
+        // Backspace, Delete, Home, End, Left, Right - pass to input box
+        if (keyCode == 259 || keyCode == 261 || keyCode == 268 || keyCode == 269 || 
+            keyCode == 263 || keyCode == 262) {
+            inputBox.keyPressed(new net.minecraft.client.input.KeyEvent(keyCode, scanCode, modifiers));
+            return true;
+        }
+
+        return true; // Consume all keys to prevent game controls
+    }
+
+    public static boolean handleCharTyped(char codePoint, int modifiers) {
+        if (isOpen && inputBox != null) {
+            inputBox.charTyped(new net.minecraft.client.input.CharacterEvent(codePoint, modifiers));
+            return true; // Consumed
+        }
+        return false;
+    }
+
+    public static void handleMouseClick(double mouseX, double mouseY, int button) {
+        if (!isOpen) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        int screenWidth = mc.getWindow().getGuiScaledWidth();
+        int screenHeight = mc.getWindow().getGuiScaledHeight();
+        int panelX = (int) (screenWidth - PANEL_WIDTH + slideOffset);
+        int panelY = 0;
+
+        if (button == 0 && isInTeleportButton(mouseX, mouseY, panelX, panelY)) {
+            teleportToFocusedSteve();
+            return;
+        }
+
+        if (inputBox != null) {
+            int inputAreaY = screenHeight - 80;
+            if (mouseY >= inputAreaY + 25 && mouseY <= inputAreaY + 45) {
+                inputBox.setFocused(true);
+            } else {
+                inputBox.setFocused(false);
+            }
+            inputBox.onClick(
+                new net.minecraft.client.input.MouseButtonEvent(mouseX, mouseY,
+                    new net.minecraft.client.input.MouseButtonInfo(button, 0)),
+                false
+            );
+        }
+    }
+
+    private static void renderTeleportFocusedButton(GuiGraphics graphics, Minecraft mc, int panelX, int panelY) {
+        SteveEntity focusedSteve = SteveDebugBlocksData.getSelectedSteve(mc, 96.0);
+        int buttonX = panelX + PANEL_WIDTH - PANEL_PADDING - HEADER_BUTTON_WIDTH;
+        int buttonY = panelY + 6;
+        int color = focusedSteve == null ? 0x66444444 : 0xAA1E88E5;
+        int textColor = focusedSteve == null ? 0xFF999999 : 0xFFFFFFFF;
+        graphics.fill(buttonX, buttonY, buttonX + HEADER_BUTTON_WIDTH, buttonY + HEADER_BUTTON_HEIGHT, color);
+        graphics.drawString(mc.font, "TP Focus", buttonX + 6, buttonY + 3, textColor);
+    }
+
+    private static boolean isInTeleportButton(double mouseX, double mouseY, int panelX, int panelY) {
+        int buttonX = panelX + PANEL_WIDTH - PANEL_PADDING - HEADER_BUTTON_WIDTH;
+        int buttonY = panelY + 6;
+        return mouseX >= buttonX
+            && mouseX <= buttonX + HEADER_BUTTON_WIDTH
+            && mouseY >= buttonY
+            && mouseY <= buttonY + HEADER_BUTTON_HEIGHT;
+    }
+
+    private static void teleportToFocusedSteve() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
+            return;
+        }
+        SteveEntity focusedSteve = SteveDebugBlocksData.getSelectedSteve(mc, 96.0);
+        if (focusedSteve == null) {
+            addSystemMessage("No focused Steve selected.");
+            return;
+        }
+        mc.player.connection.sendCommand("steve tp " + focusedSteve.getSteveName());
+        addSystemMessage("Teleporting to " + focusedSteve.getSteveName() + "...");
+    }
+
+    public static void handleMouseScroll(double scrollDelta) {
+        if (!isOpen) return;
+        
+        int scrollAmount = (int)(scrollDelta * 3 * MESSAGE_HEIGHT);
+        scrollOffset -= scrollAmount;
+        scrollOffset = Math.max(0, Math.min(scrollOffset, maxScroll));
+    }
+
+    private static void sendCommand(String command) {
+        Minecraft mc = Minecraft.getInstance();
+        
+        commandHistory.add(command);
+        if (commandHistory.size() > 50) {
+            commandHistory.remove(0);
+        }
+        
+        addUserMessage(command);
+
+        String commandLower = command.trim().toLowerCase();
+        if (commandLower.equals("settings") || commandLower.equals("/settings")) {
+            openSettingsScreen();
+            addSystemMessage("Opened Steve settings.");
+            return;
+        }
+        if (commandLower.equals("screenshot") || commandLower.equals("pov screenshot") || commandLower.equals("pov") ||
+            commandLower.equals("cheat screenshot") || commandLower.equals("cheat pov") ||
+            commandLower.equals("cheat pov screenshot")) {
+            if (StevePovScreenshot.requestNearestSteve()) {
+                addSystemMessage("Capturing Steve POV screenshot...");
+            } else {
+                addSystemMessage("No Steve agents found for POV screenshot.");
+            }
+            return;
+        }
+
+        if (command.toLowerCase().startsWith("spawn ")) {
+            String name = command.substring(6).trim();
+            if (name.isEmpty()) name = "Steve";
+            if (mc.player != null) {
+                mc.player.connection.sendCommand("steve spawn " + name);
+                addSystemMessage("Spawning Steve agent: " + name);
+            }
+            return;
+        }
+
+        List<String> targetSteves = parseTargetSteves(command);
+        
+        if (targetSteves.isEmpty()) {
+            var steves = SteveMod.getSteveManager().getAllSteves();
+            if (!steves.isEmpty()) {
+                targetSteves.add(steves.iterator().next().getSteveName());
+            } else {
+                // No Steves available
+                addSystemMessage("No Steve agents found! Use 'spawn <name>' to create one.");
+                return;
+            }
+        }
+
+        // Send command to all targeted Steves
+        if (mc.player != null) {
+            for (String steveName : targetSteves) {
+                mc.player.connection.sendCommand("steve tell " + steveName + " " + command);
+            }
+            
+            if (targetSteves.size() > 1) {
+                addSystemMessage("→ " + String.join(", ", targetSteves) + ": " + command);
+            } else {
+                addSystemMessage("→ " + targetSteves.get(0) + ": " + command);
+            }
+        }
+    }
+    
+    private static List<String> parseTargetSteves(String command) {
+        List<String> targets = new ArrayList<>();
+        String commandLower = command.toLowerCase();
+        
+        if (commandLower.startsWith("all steves ") || commandLower.startsWith("all ") || 
+            commandLower.startsWith("everyone ") || commandLower.startsWith("everybody ")) {
+            var allSteves = SteveMod.getSteveManager().getAllSteves();
+            for (SteveEntity steve : allSteves) {
+                targets.add(steve.getSteveName());
+            }
+            return targets;
+        }
+        
+        var allSteves = SteveMod.getSteveManager().getAllSteves();
+        List<String> availableNames = new ArrayList<>();
+        for (SteveEntity steve : allSteves) {
+            availableNames.add(steve.getSteveName().toLowerCase());
+        }
+        
+        String[] parts = command.split(",");
+        for (String part : parts) {
+            String trimmed = part.trim();
+            String firstWord = trimmed.split(" ")[0].toLowerCase();
+            
+            if (availableNames.contains(firstWord)) {
+                for (SteveEntity steve : allSteves) {
+                    if (steve.getSteveName().equalsIgnoreCase(firstWord)) {
+                        targets.add(steve.getSteveName());
+                        break;
+                    }
+                }
+            }
+        }
+        
+        return targets;
+    }
+
+    public static void tick() {
+        if (isOpen && inputBox != null) {
+            // Auto-focus input box when panel is open
+            if (!inputBox.isFocused()) {
+                inputBox.setFocused(true);
+            }
+        }
+    }
+
+    public static void toggleInventoryOverlay() {
+        showInventoryOverlay = !showInventoryOverlay;
+        SteveMod.LOGGER.info("SteveGUI inventory overlay -> {}", showInventoryOverlay ? "ON" : "OFF");
+    }
+
+    public static void toggleMemoryOverlay() {
+        showMemoryOverlay = !showMemoryOverlay;
+        SteveMod.LOGGER.info("SteveGUI memory overlay -> {}", showMemoryOverlay ? "ON" : "OFF");
+    }
+
+    public static void openSettingsScreen() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) {
+            return;
+        }
+        mc.setScreen(new SteveSettingsScreen(mc.screen));
+    }
+
+    private static void renderInventoryOverlay(GuiGraphics graphics) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) return;
+
+        SteveEntity steve = SteveDebugBlocksData.getSelectedSteve(mc, 96.0);
+        if (steve == null) {
+            return;
+        }
+
+        int width = 220;
+        int height = 70;
+        int x = 6;
+        int y = 30;
+
+        graphics.fill(x, y, x + width, y + height, INVENTORY_BG);
+        graphics.fill(x, y, x + width, y + 1, INVENTORY_BORDER);
+        graphics.fill(x, y, x + 1, y + height, INVENTORY_BORDER);
+        graphics.fill(x + width - 1, y, x + width, y + height, INVENTORY_BORDER);
+        graphics.fill(x, y + height - 1, x + width, y + height, INVENTORY_BORDER);
+        graphics.drawString(mc.font, "Inventory - " + steve.getSteveName(), x + 6, y + 6, INVENTORY_TEXT);
+
+        String summary = steve.getInventorySummarySynced();
+        if (summary == null || summary.isBlank()) {
+            summary = "Inventory empty";
+        }
+
+        List<String> lines = wrapTextLines(mc.font, summary, width - 12);
+        int lineY = y + 20;
+        for (String line : lines) {
+            if (lineY > y + height - 10) break;
+            graphics.drawString(mc.font, line, x + 6, lineY, INVENTORY_TEXT);
+            lineY += mc.font.lineHeight + 2;
+        }
+    }
+
+    private static void renderMemoryOverlay(GuiGraphics graphics) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) return;
+
+        SteveEntity steve = SteveDebugBlocksData.getSelectedSteve(mc, 96.0);
+        if (steve == null) {
+            return;
+        }
+
+        int width = 320;
+        int height = 128;
+        int x = 6;
+        int y = 106;
+
+        graphics.fill(x, y, x + width, y + height, INVENTORY_BG);
+        graphics.fill(x, y, x + width, y + 1, INVENTORY_BORDER);
+        graphics.fill(x, y, x + 1, y + height, INVENTORY_BORDER);
+        graphics.fill(x + width - 1, y, x + width, y + height, INVENTORY_BORDER);
+        graphics.fill(x, y + height - 1, x + width, y + height, INVENTORY_BORDER);
+        graphics.drawString(mc.font, "Memory - " + steve.getSteveName(), x + 6, y + 6, INVENTORY_TEXT);
+
+        String blockSummary = steve.getMemoryBlocksSummarySynced();
+        if (blockSummary == null || blockSummary.isBlank()) {
+            blockSummary = "No block memory";
+        }
+        String chestSummary = steve.getMemoryChestsSummarySynced();
+        if (chestSummary == null || chestSummary.isBlank()) {
+            chestSummary = "No chest memory";
+        }
+        String semanticSummary = steve.getMemorySemanticSummarySynced();
+        if (semanticSummary == null || semanticSummary.isBlank()) {
+            semanticSummary = "No semantic memory";
+        }
+
+        graphics.drawString(mc.font, "Blocks:", x + 6, y + 20, INVENTORY_TEXT);
+        List<String> blockLines = wrapTextLines(mc.font, blockSummary, width - 12);
+        int lineY = y + 32;
+        for (String line : blockLines) {
+            if (lineY > y + 66) break;
+            graphics.drawString(mc.font, line, x + 6, lineY, INVENTORY_TEXT);
+            lineY += mc.font.lineHeight + 1;
+        }
+
+        graphics.drawString(mc.font, "Chests: " + chestSummary, x + 6, y + 76, INVENTORY_TEXT);
+        graphics.drawString(mc.font, "Semantic: " + semanticSummary, x + 6, y + 90, INVENTORY_TEXT);
+        graphics.drawString(mc.font, "Legend: yellow=working green=episodic orange=chests", x + 6, y + 106, INVENTORY_TEXT);
+    }
+
+    private static List<String> wrapTextLines(net.minecraft.client.gui.Font font, String text, int maxWidth) {
+        List<String> lines = new ArrayList<>();
+        String[] parts = text.split(", ");
+        StringBuilder current = new StringBuilder();
+        for (String part : parts) {
+            String candidate = current.length() == 0 ? part : current + ", " + part;
+            if (font.width(candidate) <= maxWidth) {
+                current.setLength(0);
+                current.append(candidate);
+            } else {
+                if (current.length() > 0) {
+                    lines.add(current.toString());
+                }
+                current.setLength(0);
+                current.append(part);
+            }
+        }
+        if (current.length() > 0) {
+            lines.add(current.toString());
+        }
+        if (lines.isEmpty()) {
+            lines.add(text);
+        }
+        return lines;
+    }
+
+    private static void renderPanelDebugStatus(GuiGraphics graphics, int x, int y) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) {
+            return;
+        }
+        SteveEntity steve = SteveDebugBlocksData.getSelectedSteve(mc, 96.0);
+        if (steve == null) {
+            return;
+        }
+        String status = steve.getDebugStatus();
+        if (status == null || status.isBlank()) {
+            status = "Idle";
+        }
+        String playtestState = steve.getPlaytestStateSynced();
+        String playtestInfo = steve.getPlaytestInfoSynced();
+        int testColor = playtestColor(playtestState);
+        String testLine = "Test: " + playtestLabel(playtestState);
+        if (playtestInfo != null && !playtestInfo.isBlank()) {
+            testLine += " - " + playtestInfo;
+        }
+        graphics.fill(x, y + 2, x + 6, y + 8, testColor);
+        graphics.drawString(mc.font, wrapText(mc.font, testLine, PANEL_WIDTH - 20), x + 10, y, testColor);
+
+        BlockPos target = steve.getDebugTargetBlock();
+        String targetLabel = target == null ? "-" : (target.getX() + "," + target.getY() + "," + target.getZ());
+        String line = "§8" + steve.getSteveName() + " | " + status + " | vis=" + steve.getVisibleBlocksCount() + " | target=" + targetLabel;
+        graphics.drawString(mc.font, wrapText(mc.font, line, PANEL_WIDTH - 12), x, y + 11, 0xFF9A9A9A);
+
+        String taskSummary = steve.getTaskStatusSummarySynced();
+        List<String> taskLines = taskSummary == null || taskSummary.isBlank()
+            ? List.of("No active tasks")
+            : splitTaskSummary(taskSummary);
+        graphics.drawString(mc.font, "Tasks:", x, y + 22, 0xFFB8D8FF);
+        int maxLines = 12;
+        for (int i = 0; i < taskLines.size() && i < maxLines; i++) {
+            String taskLine = wrapText(mc.font, taskLines.get(i), PANEL_WIDTH - 12);
+            graphics.drawString(mc.font, taskLine, x, y + 33 + (i * 10), taskLineColor(taskLine));
+        }
+        if (taskLines.size() > maxLines) {
+            graphics.drawString(mc.font, "... +" + (taskLines.size() - maxLines) + " more", x, y + 33 + (maxLines * 10), 0xFF8A8A8A);
+        }
+    }
+
+    private static int estimateTaskStatusHeight(Minecraft mc) {
+        if (mc.level == null || mc.player == null) {
+            return 0;
+        }
+        SteveEntity steve = SteveDebugBlocksData.getSelectedSteve(mc, 96.0);
+        if (steve == null) {
+            return 0;
+        }
+        String taskSummary = steve.getTaskStatusSummarySynced();
+        if (taskSummary == null || taskSummary.isBlank()) {
+            return 12;
+        }
+        int lineCount = splitTaskSummary(taskSummary).size();
+        return 12 + (Math.min(12, lineCount) * 10);
+    }
+
+    private static List<String> splitTaskSummary(String summary) {
+        List<String> lines = new ArrayList<>();
+        if (summary == null || summary.isBlank()) {
+            return lines;
+        }
+        String[] parts = summary.split("\\n");
+        for (String part : parts) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            lines.add(part.trim());
+        }
+        return lines;
+    }
+
+    private static int taskLineColor(String lineRaw) {
+        String line = lineRaw == null ? "" : lineRaw.toUpperCase(java.util.Locale.ROOT);
+        if (line.contains("[RUNNING]") || line.contains("[IN_PROGRESS]")) {
+            return 0xFF88E188;
+        }
+        if (line.contains("[FAILED]")) {
+            return 0xFFFF8A80;
+        }
+        if (line.contains("[QUEUED]") || line.contains("[PENDING]")) {
+            return 0xFFFFE082;
+        }
+        if (line.contains("[PLANNING]")) {
+            return 0xFF80DEEA;
+        }
+        return 0xFFB0BEC5;
+    }
+
+    private static int playtestColor(String stateRaw) {
+        String state = stateRaw == null ? "NONE" : stateRaw.trim().toUpperCase(java.util.Locale.ROOT);
+        return switch (state) {
+            case "RUNNING" -> 0xFFFFC107;
+            case "PASS" -> 0xFF4CAF50;
+            case "FAIL" -> 0xFFF44336;
+            case "CANCELED" -> 0xFF9E9E9E;
+            default -> 0xFF607D8B;
+        };
+    }
+
+    private static String playtestLabel(String stateRaw) {
+        String state = stateRaw == null ? "NONE" : stateRaw.trim().toUpperCase(java.util.Locale.ROOT);
+        return switch (state) {
+            case "RUNNING" -> "Running (no outcome yet)";
+            case "PASS" -> "PASS";
+            case "FAIL" -> "FAIL";
+            case "CANCELED" -> "Canceled";
+            default -> "Not running";
+        };
+    }
+}

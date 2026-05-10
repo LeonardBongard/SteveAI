@@ -1,0 +1,40 @@
+{
+  "name": "steveai-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Minecraft player-companion bot. Mineflayer + Ollama (gpt-oss:20b) + persistent memory + spatial grounding. See ../docs/COMPANION_V1_DIRECTION.md.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "tsx src/bot.ts",
+    "dev": "tsx watch src/bot.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "eval": "tsx eval/runner.ts",
+    "lint": "eslint src eval tests"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "dotenv": "^16.4.5",
+    "mineflayer": "^4.23.0",
+    "mineflayer-collectblock": "^1.6.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "ollama": "^0.5.11",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "sqlite-vec": "^0.1.6",
+    "vec3": "^0.1.10",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.17.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
