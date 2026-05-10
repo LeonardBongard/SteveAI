@@ -2,38 +2,42 @@
 - What changed:
 - Why this change is needed:
 
-## Behavior Scenarios
+## Behavior scenarios
 - Scenario(s) validated:
 - Expected behavior:
 - Actual behavior:
 
-## Modularity & Extensibility Checklist (Required)
-- [ ] I used reusable abstractions (interfaces/modules), not one-off branching in monolith code.
-- [ ] Strategy/policy logic is separated from action execution logic.
-- [ ] I avoided single-item assumptions and used resolver/category-driven selection where relevant.
-- [ ] Thresholds/ranges/priorities are config/constants, not buried magic numbers.
+## Modularity & extensibility (required)
+- [ ] Used reusable abstractions; no one-off branching in monolith code.
+- [ ] Strategy / policy logic separated from action execution.
+- [ ] Avoided single-item assumptions; resolver / category-driven selection where relevant.
+- [ ] Thresholds, ranges, priorities are config / constants — no buried magic numbers.
 
-## Minecraft Legality Checklist (Required)
-- [ ] Actions are Minecraft-legal (required tool/station/material/state checked).
-- [ ] No illegal instant conversions (for example smelt/craft/state conversions).
-- [ ] Missing prerequisites queue legal setup/recovery steps.
+## Minecraft legality (required)
+- [ ] Actions are Minecraft-legal (required tool / station / material / state checked).
+- [ ] No illegal instant conversions (e.g. smelt / craft / state shortcuts).
+- [ ] Missing prerequisites enqueue legal setup or recovery steps.
 
-## Robustness Checklist (Required)
-- [ ] Main task intent is preserved through subtasks.
-- [ ] Stale/unreachable targets are handled (reroute, replace target, or fail-fast path).
-- [ ] No-progress/loop guard behavior is present where needed.
+## Robustness (required)
+- [ ] Top-level task intent preserved through subtasks.
+- [ ] Stale / unreachable targets handled (reroute, replace, or fail-fast).
+- [ ] No-progress / loop guard present where retries could spin.
 
-## Observability Checklist (Required)
-- [ ] Added structured logs for key decisions, retries, and failure reasons.
-- [ ] Added/updated debug state hooks if behavior is hard to inspect in gameplay.
+## Observability (required)
+- [ ] Structured logs (pino, tagged `[BOT][PLAN][ACT][MEM][GROUND][LLM][EVAL]`) for key decisions and failure reasons.
 - [ ] Avoided noisy player-facing debug spam.
 
-## Validation Checklist (Required)
-- [ ] `./gradlew -q test`
-- [ ] `./scripts/test_mod_pipeline.sh`
-- [ ] Updated scenario docs if behavior changed (`docs/EVAL_SCENARIOS.md`).
-- [ ] Included playtest notes when in-world behavior changed.
+## Validation (required)
+- [ ] `npx tsc --noEmit` (typecheck)
+- [ ] `npm test` (unit tests)
+- [ ] `npm run eval` (or the affected scenario explicitly) if behavior changed
+- [ ] Updated [`docs/COMPANION_V1_DIRECTION.md`](../docs/COMPANION_V1_DIRECTION.md) if architecture-relevant.
+- [ ] Manual playtest notes when in-world behavior changed.
 
-## Risks / Follow-ups
+## Risks / follow-ups
 - Known limitations:
 - Follow-up tasks:
+
+---
+
+> If this PR touches `legacy/forge-mod/`, please reconsider — that directory is a frozen archive (see [`legacy/forge-mod/ARCHIVE_NOTICE.md`](../legacy/forge-mod/ARCHIVE_NOTICE.md)). Active development is in [`steveai-companion/`](../steveai-companion/).
