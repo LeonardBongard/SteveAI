@@ -94,11 +94,69 @@ export async function runSkillBody(
     const value = await Promise.race([fn(bot, args), timeout]);
     return { ok: true, value, durationMs: Date.now() - start };
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    return { ok: false, error, durationMs: Date.now() - start };
+    const raw = err instanceof Error ? err.message : String(err);
+    const decorated = decorateError(raw, body);
+    return { ok: false, error: decorated, durationMs: Date.now() - start };
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * Turn opaque runtime errors into actionable hints. The LLM otherwise sees
+ * `TypeError: Cannot read properties of null (reading 'offset')` and has no
+ * idea which call returned null. Here we pattern-match the most common
+ * Mineflayer-API confusions and append a one-line hint.
+ *
+ * Returns the decorated error string (original message + hint, or the
+ * original message if no pattern matched).
+ */
+export function decorateError(message: string, code: string): string {
+  // Match patterns like: Cannot read properties of null (reading 'X')
+  // or:                   Cannot read properties of undefined (reading 'X')
+  const nullProp = /Cannot read properties of (null|undefined) \(reading '([^']+)'\)/.exec(message);
+  if (nullProp) {
+    const prop = nullProp[2] ?? '';
+    const hints: string[] = [];
+
+    // findBlocks returns Vec3[]; treating result[0] as a Block fails on .position
+    if (/\bbot\.findBlocks\s*\(/.test(code) && (prop === 'position' || prop === 'name' || prop === 'type')) {
+      hints.push(
+        `bot.findBlocks (plural) returns an ARRAY OF Vec3 POSITIONS, not Block objects. Use bot.findBlock (singular) for one Block, or wrap with bot.blockAt(pos) for each position.`
+      );
+    }
+    // Calling .offset() on a null result of blockAt/findBlock
+    if (prop === 'offset' && /\bbot\.(blockAt|findBlock)\s*\(/.test(code)) {
+      hints.push(
+        `bot.findBlock returns null if no match; bot.blockAt returns null off-loaded-chunks. Null-check before calling .position.offset(...).`
+      );
+    }
+    // Hit .id on a missing registry entry (mostly caught by registry-ref lint;
+    // this is the fallback when somehow it slipped through)
+    if (prop === 'id' && /\bbot\.registry\.(itemsByName|blocksByName)\./.test(code)) {
+      hints.push(
+        `bot.registry.{itemsByName,blocksByName}.X returns undefined for unknown names. Verify the exact registry name via lookupBlock / lookupRecipe.`
+      );
+    }
+    // .find on inventory returning undefined, then trying to use .name or .type
+    if ((prop === 'name' || prop === 'type' || prop === 'count' || prop === 'slot') && /\binventory\.items\(\)\.find\b/.test(code)) {
+      hints.push(
+        `bot.inventory.items().find(...) returns undefined if no item matches. Null-check the result before accessing .${prop}.`
+      );
+    }
+
+    if (hints.length > 0) {
+      return `${message}  HINT: ${hints.join(' / ')}`;
+    }
+  }
+
+  // ReferenceError: global is not defined — the LLM keeps trying to destructure
+  // sandbox helpers from `global`.
+  if (/ReferenceError: global is not defined/.test(message)) {
+    return `${message}  HINT: bot, Vec3, goals, Movements, console are TOP-LEVEL identifiers in this sandbox. Use them directly, not via global.`;
+  }
+
+  return message;
 }
 
 /** Convenience: just run an arbitrary code expression once. Used by the runOnce tool. */

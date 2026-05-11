@@ -93,12 +93,40 @@ on the next turn and let you patch.
 
 # Equipping + placing a block
 
-  const dirt = bot.inventory.items().find((i) => i.name === 'dirt');
-  if (!dirt) throw new Error('no dirt in inventory');
-  await bot.equip(dirt, 'hand');
-  const ref = bot.blockAt(new Vec3(x, y - 1, z));
-  if (!ref || ref.name === 'air') throw new Error('no surface to place against');
-  await bot.placeBlock(ref, new Vec3(0, 1, 0));
+The bot.placeBlock API needs (a) a REFERENCE block already in the world,
+(b) a face vector pointing FROM the reference TO where the new block goes.
+The bot's hand must hold the item being placed.
+
+Simplest place-near-bot pattern (just place against the block under your feet):
+
+  const itemName = 'crafting_table'; // or 'dirt', etc.
+  const item = bot.inventory.items().find((i) => i.name === itemName);
+  if (!item) throw new Error(\`no \${itemName} in inventory\`);
+  await bot.equip(item, 'hand');
+  const me = bot.entity.position;
+  const ref = bot.blockAt(new Vec3(Math.floor(me.x), Math.floor(me.y) - 1, Math.floor(me.z)));
+  if (!ref || ref.name === 'air') throw new Error('no surface beneath the bot to place against');
+  await bot.placeBlock(ref, new Vec3(0, 1, 0));  // 0,1,0 = top face
+
+# bot.findBlock vs bot.findBlocks — these have DIFFERENT return types
+
+  // SINGULAR: returns a single Block (object with .name, .position, .type)
+  // or null if no match. Most of the time, this is what you want.
+  const log = bot.findBlock({ matching: bot.registry.blocksByName.oak_log.id, maxDistance: 32 });
+  if (!log) throw new Error('no oak_log within 32 blocks');
+  log.position;  // ← Vec3, real
+
+  // PLURAL: returns an ARRAY of Vec3 POSITIONS (not blocks!). Used when you
+  // want several candidates. To get the Block at each position, use blockAt.
+  const positions = bot.findBlocks({ matching: ..., maxDistance: 16, count: 5 });
+  for (const pos of positions) {
+    const block = bot.blockAt(pos);
+    if (block && block.name === 'dirt') { /* ... */ }
+  }
+  // ✗ Common mistake:
+  //     const target = positions[0];
+  //     await bot.placeBlock(target, ...);   // target is a Vec3 not a Block
+  //     target.position.offset(...)           // .position is undefined on Vec3
 
 # Attacking a mob
 
@@ -113,12 +141,14 @@ on the next turn and let you patch.
 
 ## API gotchas (these are real failure modes I have seen in this project)
 
-- goals IS A TOP-LEVEL GLOBAL inside skills (along with bot, Vec3, Movements,
-  console). Do NOT try to access it through bot:
-    const goals = bot.pathfinder.goals;       // ❌ undefined
+- bot, Vec3, goals, Movements, console are ALL top-level identifiers inside
+  the sandbox. Use them DIRECTLY. Do NOT do:
+    const { Vec3, goals } = global;            // ❌ "global is not defined"
+    const goals = bot.pathfinder.goals;        // ❌ undefined
     const { GoalGetToBlock } = bot.pathfinder.goals;  // ❌ same
-  Use directly:
-    new goals.GoalGetToBlock(x, y, z)         // ✓
+  Just use:
+    new Vec3(x, y, z)                          // ✓
+    new goals.GoalGetToBlock(x, y, z)          // ✓
     new goals.GoalNear(x, y, z, 1)             // ✓
 - Players have e.username (e.g. 'Yailix'). Mobs have e.name (e.g. 'spider').
   Don't use e.name to match players or e.username to match mobs.
