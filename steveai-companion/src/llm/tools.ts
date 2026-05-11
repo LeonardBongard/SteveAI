@@ -36,6 +36,8 @@ const writeSkillSchema = z
     name: z.string().min(1).max(60).describe('snake_case identifier; semantically descriptive (e.g. mine_one_oak_log, craft_fishing_rod). Used for retrieval; pick a clear name a weaker model could pick later.'),
     description: z.string().min(10).describe('One-sentence natural-language description of what the skill does. Specific enough that searchSkill returns it for similar requests later.'),
     code: z.string().min(1).describe('Body of an async function (bot, args) => { ... }. Available in scope: bot (mineflayer), Vec3, goals, Movements, console. Do NOT use require() — pre-injected globals only. Throw on failure.'),
+    prerequisites: z.array(z.string()).optional().describe('Optional list of OTHER skill names this skill depends on (i.e. skills this one INVOKES inside its body, or skills that produce items this one needs). The planner will warn if you invoke this skill while any prerequisite is missing or unverified. Use this for composed skills: e.g. craft_wooden_pickaxe lists prerequisites=["craft_oak_planks","craft_sticks","craft_crafting_table"].'),
+    producesItems: z.array(z.string()).optional().describe('Optional list of item names this skill is EXPECTED to add to the inventory when it succeeds (e.g. ["oak_planks"], ["wooden_pickaxe"]). Best-effort declaration. The planner uses this for reverse-prereq lookup ("which skill produces X?") and for after-action checks.'),
   })
   .describe('Save an executable skill (JS) into the skill library. Persisted across sessions. After saving, INVOKE it to run.');
 
@@ -99,6 +101,13 @@ const findMobsDroppingSchema = z
   })
   .describe('Reverse drop lookup: which mobs drop this item? Use this when the player asks for an item that is mob-derived (string from spider, leather from cow, etc.).');
 
+const lookupTechTreeSchema = z
+  .object({
+    item: z.string().min(1).describe('Target item name, e.g. "iron_pickaxe".'),
+    maxDepth: z.number().int().min(1).max(6).optional().describe('How deep to chase prerequisites. Default 4 (e.g. iron_pickaxe → iron_ingot → iron_ore covers it).'),
+  })
+  .describe('Walk the recipe graph backwards to raw materials. Returns the full prerequisite chain in one call: e.g. iron_pickaxe needs 3x iron_ingot (which needs furnace + iron_ore + fuel) plus 2x stick (which needs 1x planks). Use BEFORE planning multi-step crafting tasks.');
+
 // ============================================================================
 // Grounding (kept from v1)
 // ============================================================================
@@ -145,6 +154,44 @@ const recallEpisodesSchema = z
   .describe('Recall recent episodic events, optionally filtered by event tag.');
 
 // ============================================================================
+// Goal stack (T1.1) — multi-turn intent tracking
+// ============================================================================
+
+const pushGoalSchema = z
+  .object({
+    text: z.string().min(1).max(200).describe('Short description of the goal, e.g. "get player a wooden pickaxe".'),
+    parentId: z.number().int().optional().describe('Optional id of an active parent goal; this becomes a sub-goal.'),
+  })
+  .describe('Push a new goal onto the stack. Use when the player gives a new high-level ask, or when you decompose an existing goal into sub-steps.');
+
+const completeGoalSchema = z
+  .object({
+    id: z.number().int(),
+  })
+  .describe('Mark a goal done. Cascades to its active sub-goals. Call this when you have actually completed the work the goal describes.');
+
+const cancelGoalSchema = z
+  .object({
+    id: z.number().int(),
+  })
+  .describe('Cancel a goal (and its sub-goals). Use when the player explicitly drops the request or you determine the goal is unreachable.');
+
+const listGoalsSchema = z
+  .object({})
+  .describe('List all currently active goals. Useful for orienting at the start of a turn; the active goals are also auto-injected into bot state.');
+
+// ============================================================================
+// After-action review (T2.4) — recall what happened on prior skill invocations
+// ============================================================================
+
+const afterActionReviewSchema = z
+  .object({
+    skillName: z.string().optional().describe('Optional: filter to one specific skill name.'),
+    limit: z.number().int().min(1).max(20).optional().describe('How many recent trials to fetch. Default 6.'),
+  })
+  .describe('Review recent skill invocations: success/failure, duration, inventory + nearby utilities at the time, and the error if any. Use when the player asks "what just happened?" or when diagnosing why a skill keeps failing. Reads from the experience pool, not from chat history.');
+
+// ============================================================================
 // Registry
 // ============================================================================
 
@@ -165,6 +212,7 @@ export const TOOLS = {
   lookupBlock: lookupBlockSchema,
   findRecipesContaining: findRecipesContainingSchema,
   findMobsDropping: findMobsDroppingSchema,
+  lookupTechTree: lookupTechTreeSchema,
 
   // grounding
   resolveReference: resolveReferenceSchema,
@@ -174,6 +222,14 @@ export const TOOLS = {
   recallPinnedFacts: recallPinnedFactsSchema,
   recordEpisodicEvent: recordEpisodicEventSchema,
   recallEpisodes: recallEpisodesSchema,
+  // goals (T1.1)
+  pushGoal: pushGoalSchema,
+  completeGoal: completeGoalSchema,
+  cancelGoal: cancelGoalSchema,
+  listGoals: listGoalsSchema,
+
+  // after-action review (T2.4)
+  afterActionReview: afterActionReviewSchema,
 } as const;
 
 export type ToolName = keyof typeof TOOLS;

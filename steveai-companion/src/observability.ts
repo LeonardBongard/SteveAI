@@ -51,22 +51,33 @@ export function dumpSkillToDisk(args: {
   verified: boolean;
   successCount: number;
   failureCount: number;
+  prerequisites?: string[];
+  producesItems?: string[];
 }): string {
   fs.mkdirSync(SKILLS_DIR, { recursive: true });
   const file = path.join(SKILLS_DIR, `${args.name}.js`);
-  const header = [
+  const headerLines = [
     '// SteveAI skill — generated at runtime by gpt-oss:20b.',
     `// name:        ${args.name}`,
     `// description: ${args.description}`,
     `// verified:    ${args.verified}`,
     `// counts:      ✓${args.successCount} / ✗${args.failureCount}`,
+  ];
+  if (args.prerequisites && args.prerequisites.length > 0) {
+    headerLines.push(`// prereqs:     ${args.prerequisites.join(', ')}`);
+  }
+  if (args.producesItems && args.producesItems.length > 0) {
+    headerLines.push(`// produces:    ${args.producesItems.join(', ')}`);
+  }
+  headerLines.push(
     `// updated:     ${new Date().toISOString()}`,
     '',
     '// The code below is the BODY of an async function (bot, args) => { … };',
     '// it runs inside a node:vm sandbox with bot, Vec3, goals, Movements,',
     '// console, setTimeout, Promise in scope.',
-    '',
-  ].join('\n');
+    ''
+  );
+  const header = headerLines.join('\n');
   fs.writeFileSync(file, header + args.code + '\n');
   return file;
 }

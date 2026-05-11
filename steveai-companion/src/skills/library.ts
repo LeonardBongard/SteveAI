@@ -25,6 +25,8 @@ export interface Skill {
   failureCount: number;
   lastInvokedAt: string | null;
   verified: boolean;
+  prerequisites: string[];
+  producesItems: string[];
 }
 
 interface SkillRow {
@@ -38,6 +40,18 @@ interface SkillRow {
   last_invoked_at: string | null;
   verified: number;
   consecutive_failures: number;
+  prerequisites: string;
+  produces_items: string;
+}
+
+function safeJsonArray(raw: string): string[] {
+  try {
+    const v = JSON.parse(raw);
+    if (Array.isArray(v)) return v.filter((x) => typeof x === 'string');
+    return [];
+  } catch {
+    return [];
+  }
 }
 
 function rowToSkill(r: SkillRow): Skill {
@@ -51,6 +65,8 @@ function rowToSkill(r: SkillRow): Skill {
     failureCount: r.failure_count,
     lastInvokedAt: r.last_invoked_at,
     verified: r.verified === 1,
+    prerequisites: safeJsonArray(r.prerequisites ?? '[]'),
+    producesItems: safeJsonArray(r.produces_items ?? '[]'),
   };
 }
 
@@ -77,7 +93,12 @@ export class SkillLibrary {
    *    VerifiedSkillExistsError. The LLM must pick a new name to evolve
    *    a working skill.
    */
-  async save(name: string, description: string, code: string): Promise<Skill> {
+  async save(
+    name: string,
+    description: string,
+    code: string,
+    opts: { prerequisites?: string[]; producesItems?: string[] } = {}
+  ): Promise<Skill> {
     const ts = nowIso();
     const cleanName = sanitizeName(name);
     if (!cleanName) throw new Error(`invalid skill name: "${name}"`);
@@ -87,20 +108,25 @@ export class SkillLibrary {
       throw new VerifiedSkillExistsError(cleanName, existing.success_count);
     }
 
+    const prereqs = JSON.stringify((opts.prerequisites ?? []).filter((s) => typeof s === 'string'));
+    const produces = JSON.stringify((opts.producesItems ?? []).filter((s) => typeof s === 'string'));
+
     const upsert = getDb().prepare<
-      [string, string, string, string],
+      [string, string, string, string, string, string],
       SkillRow
     >(`
-      INSERT INTO skills (ts, name, description, code, success_count, failure_count, verified, consecutive_failures)
-      VALUES (?, ?, ?, ?, 0, 0, 0, 0)
+      INSERT INTO skills (ts, name, description, code, success_count, failure_count, verified, consecutive_failures, prerequisites, produces_items)
+      VALUES (?, ?, ?, ?, 0, 0, 0, 0, ?, ?)
       ON CONFLICT(name) DO UPDATE SET
         ts = excluded.ts,
         description = excluded.description,
         code = excluded.code,
-        consecutive_failures = 0
-      RETURNING id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures
+        consecutive_failures = 0,
+        prerequisites = excluded.prerequisites,
+        produces_items = excluded.produces_items
+      RETURNING id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures, prerequisites, produces_items
     `);
-    const row = upsert.get(ts, cleanName, description, code);
+    const row = upsert.get(ts, cleanName, description, code, prereqs, produces);
     if (!row) throw new Error(`skill insert returned no row for ${cleanName}`);
 
     // Embed the description so we can retrieve later. Fire-and-forget.
@@ -128,11 +154,28 @@ export class SkillLibrary {
   private getRow(name: string): SkillRow | null {
     const row = getDb()
       .prepare<[string], SkillRow>(
-        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures
+        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures, prerequisites, produces_items
          FROM skills WHERE name = ?`
       )
       .get(name);
     return row ?? null;
+  }
+
+  /**
+   * Reverse lookup: which saved skills declare that they produce `item`?
+   * Used at invokeSkill time to suggest a prerequisite-skill chain when the
+   * LLM is about to call something whose inputs aren't in inventory.
+   */
+  findProducers(item: string): Skill[] {
+    const rows = getDb()
+      .prepare<[string], SkillRow>(
+        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures, prerequisites, produces_items
+         FROM skills
+         WHERE produces_items LIKE ?
+         ORDER BY verified DESC, success_count DESC`
+      )
+      .all(`%"${item}"%`);
+    return rows.map(rowToSkill).filter((s) => s.producesItems.includes(item));
   }
 
   get(name: string): Skill | null {
@@ -165,7 +208,7 @@ export class SkillLibrary {
     const overFetch = Math.max(k * 3, 12);
     const rows = getDb()
       .prepare<[Buffer, number], SkillRow>(
-        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures
+        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures, prerequisites, produces_items
          FROM skills
          WHERE embedding IS NOT NULL
          ORDER BY verified DESC, vec_distance_cosine(embedding, ?) ASC
@@ -233,7 +276,7 @@ export class SkillLibrary {
   list(limit = 50): Skill[] {
     const rows = getDb()
       .prepare<[number], SkillRow>(
-        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures
+        `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures, prerequisites, produces_items
          FROM skills
          ORDER BY verified DESC, (success_count - failure_count) DESC, ts DESC
          LIMIT ?`

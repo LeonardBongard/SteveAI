@@ -20,7 +20,7 @@ import { logs } from '../log.js';
 
 const DEFAULT_PATH = path.resolve(process.cwd(), 'data', 'memory.db');
 export const EMBED_DIM = 768; // nomic-embed-text
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 let db: DB | null = null;
 
@@ -117,8 +117,44 @@ function initSchema(handle: DB): void {
       last_invoked_at TEXT,
       embedding BLOB,
       verified INTEGER NOT NULL DEFAULT 0,
-      consecutive_failures INTEGER NOT NULL DEFAULT 0
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      -- v5 (T1.2): JSON arrays. prerequisites = skill names this skill invokes
+      -- and that should run first. produces_items = item names this skill is
+      -- expected to add to inventory (best-effort declaration from the LLM).
+      prerequisites TEXT NOT NULL DEFAULT '[]',
+      produces_items TEXT NOT NULL DEFAULT '[]'
     );
+
+    -- v5 (T1.1): multi-turn goal tracking. Goals persist across turns/sessions
+    -- with a status. Active goals are auto-injected into the bot-state snapshot
+    -- so the LLM doesn't lose track of what the player asked for.
+    CREATE TABLE IF NOT EXISTS goals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      text TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      -- 'active' | 'done' | 'cancelled'
+      parent_id INTEGER,
+      ts_done TEXT,
+      FOREIGN KEY (parent_id) REFERENCES goals(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
+
+    -- v5 (T2.1): experience pool. Snapshot of world state + outcome each
+    -- time a skill is invoked. Lets the LLM see "this skill worked when I
+    -- had X in inventory at Y" instead of just "this skill exists."
+    CREATE TABLE IF NOT EXISTS skill_trials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      skill_name TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      duration_ms INTEGER,
+      state_before TEXT NOT NULL,  -- JSON: { position, inventory, time, nearby }
+      args TEXT NOT NULL DEFAULT '{}',
+      error TEXT,
+      FOREIGN KEY (skill_name) REFERENCES skills(name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trials_skill_name ON skill_trials(skill_name);
   `);
 
   // Migrations: ALTER COLUMN if missing on existing DBs.
@@ -129,6 +165,12 @@ function initSchema(handle: DB): void {
   }
   if (!cols.some((c) => c.name === 'consecutive_failures')) {
     handle.exec("ALTER TABLE skills ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!cols.some((c) => c.name === 'prerequisites')) {
+    handle.exec("ALTER TABLE skills ADD COLUMN prerequisites TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!cols.some((c) => c.name === 'produces_items')) {
+    handle.exec("ALTER TABLE skills ADD COLUMN produces_items TEXT NOT NULL DEFAULT '[]'");
   }
 
   const stored = handle

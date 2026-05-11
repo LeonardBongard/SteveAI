@@ -126,6 +126,85 @@ export function findMobsDropping(itemName: string): MobView[] {
 }
 
 // ============================================================================
+// Tech-tree walk (T2.3) — chase recipe prerequisites to raw materials.
+// ============================================================================
+
+export interface TechTreeNode {
+  item: string;
+  count: number;
+  /** Depth from the requested root (0 = the item itself). */
+  depth: number;
+  /** Station required for THIS step (null = raw, no recipe). */
+  station: 'inventory' | 'crafting_table' | null;
+  /** Sub-trees for each ingredient (empty if raw or beyond depth). */
+  ingredients: TechTreeNode[];
+}
+
+/**
+ * Walk the recipe graph from `item` toward raw materials, up to `maxDepth`.
+ * Picks the FIRST recipe variant per item (deterministic; multi-variant
+ * exploration is the LLM's job if it cares — most often the wood/stone
+ * variants are interchangeable).
+ *
+ * Returns null if there is no recipe for the item (i.e. it's a raw material
+ * or a mob drop; the LLM should reach for findMobsDropping or
+ * lookupBlock instead).
+ */
+export function getTechTree(item: string, maxDepth = 4): TechTreeNode | null {
+  return buildTechNode(canon(item), 1, 0, maxDepth, new Set());
+}
+
+function buildTechNode(
+  item: string,
+  count: number,
+  depth: number,
+  maxDepth: number,
+  visiting: Set<string>
+): TechTreeNode | null {
+  if (visiting.has(item)) {
+    // Cycle guard — treat as terminal.
+    return { item, count, depth, station: null, ingredients: [] };
+  }
+  const recipes = getKb().recipesByItem.get(item) ?? [];
+  if (recipes.length === 0) {
+    return { item, count, depth, station: null, ingredients: [] };
+  }
+  const r = recipes[0];
+  if (!r) {
+    return { item, count, depth, station: null, ingredients: [] };
+  }
+  const station = r.inventoryCraftable ? 'inventory' : 'crafting_table';
+  if (depth >= maxDepth) {
+    return { item, count, depth, station, ingredients: [] };
+  }
+  visiting.add(item);
+  const ingredients: TechTreeNode[] = [];
+  for (const ing of r.ingredients) {
+    const sub = buildTechNode(ing.name, ing.count, depth + 1, maxDepth, visiting);
+    if (sub) ingredients.push(sub);
+  }
+  visiting.delete(item);
+  return { item, count, depth, station, ingredients };
+}
+
+/** Render a tech-tree node as a readable indented string for the LLM. */
+export function formatTechTree(node: TechTreeNode): string {
+  const lines: string[] = [];
+  walk(node);
+  return lines.join('\n');
+  function walk(n: TechTreeNode): void {
+    const pad = '  '.repeat(n.depth);
+    const stationTag = n.station === null
+      ? ' [raw — no recipe; mine or kill for it]'
+      : n.station === 'inventory'
+      ? ' [inventory 2x2]'
+      : ' [crafting_table 3x3]';
+    lines.push(`${pad}${n.count}x ${n.item}${stationTag}`);
+    for (const ing of n.ingredients) walk(ing);
+  }
+}
+
+// ============================================================================
 // Registry validation (used by skill-code lint at writeSkill time)
 // ============================================================================
 

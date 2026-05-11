@@ -30,7 +30,10 @@ import { SYSTEM_PROMPT } from './llm/prompt.js';
 import { isKnownTool, parseToolArgs, type ToolName } from './llm/tools.js';
 import { conversation } from './memory/conversation.js';
 import { episodic } from './memory/episodic.js';
-import { skills, VerifiedSkillExistsError } from './skills/library.js';
+import { goals } from './memory/goals.js';
+import { skills, VerifiedSkillExistsError, type Skill } from './skills/library.js';
+import { skillTrials, captureSnapshot } from './memory/trials.js';
+import { worldEvents } from './memory/events.js';
 import { runSkillBody, runOnceCode, checkSkillSyntax } from './skills/sandbox.js';
 import { lintSkillCode, lintRegistryReferences } from './skills/lint.js';
 import { dumpSkillToDisk, appendTranscript } from './observability.js';
@@ -40,6 +43,8 @@ import {
   lookupBlock,
   findRecipesContaining,
   findMobsDropping,
+  getTechTree,
+  formatTechTree,
   isKnownItem,
   isKnownBlock,
   suggestSimilar,
@@ -103,7 +108,17 @@ interface PlannerState {
    *  produce a strong "you already searched for this" observation rather than
    *  another round-trip to the embedding DB. */
   searchedQueries: Map<string, string>;
+  /** T1.3 — DEPS Explain step. Counts consecutive tool-call failures within
+   *  this turn. After DEPS_EXPLAIN_THRESHOLD failures we inject a forcing
+   *  prompt asking the LLM to diagnose before patching again. Resets on any
+   *  successful tool call. */
+  consecutiveFailures: number;
+  /** T1.3 — set true once we've injected the DEPS Explain prompt this turn,
+   *  so we don't spam it on every subsequent failure in the same turn. */
+  depsExplainShown: boolean;
 }
+
+const DEPS_EXPLAIN_THRESHOLD = 3;
 
 const HANDLERS: Record<ToolName, Handler> = {
   // --- I/O ---
@@ -158,7 +173,10 @@ const HANDLERS: Record<ToolName, Handler> = {
     // P5: save (refuses overwrite of verified skills).
     let saved;
     try {
-      saved = await skills.save(args.name, args.description, args.code);
+      saved = await skills.save(args.name, args.description, args.code, {
+        ...(args.prerequisites ? { prerequisites: args.prerequisites } : {}),
+        ...(args.producesItems ? { producesItems: args.producesItems } : {}),
+      });
       state.capturedThisTurn = true;
     } catch (err) {
       if (err instanceof VerifiedSkillExistsError) {
@@ -194,6 +212,8 @@ const HANDLERS: Record<ToolName, Handler> = {
         verified: true,
         successCount: 1,
         failureCount: 0,
+        ...(args.prerequisites ? { prerequisites: args.prerequisites } : {}),
+        ...(args.producesItems ? { producesItems: args.producesItems } : {}),
       });
       logs.act.info({ skill: saved.name, file: filePath, verified: true }, 'wrote skill (verified)');
       appendTranscript(
@@ -209,6 +229,8 @@ const HANDLERS: Record<ToolName, Handler> = {
       verified: false,
       successCount: 0,
       failureCount: 1,
+      ...(args.prerequisites ? { prerequisites: args.prerequisites } : {}),
+      ...(args.producesItems ? { producesItems: args.producesItems } : {}),
     });
     logs.act.warn(
       { skill: saved.name, file: filePath, error: testResult.error },
@@ -224,15 +246,44 @@ const HANDLERS: Record<ToolName, Handler> = {
     const args = parseToolArgs('invokeSkill', a);
     const skill = skills.get(args.name);
     if (!skill) return `failed: invokeSkill: no skill named "${args.name}". Use searchSkill or writeSkill first.`;
-    const result = await runSkillBody(skill.code, bot, args.args ?? {});
+
+    // T1.2: prerequisite check. Warn (don't block) when a declared prereq
+    // skill is missing OR unverified. Keeps the LLM in charge of overrides
+    // but surfaces the dependency signal at the right moment.
+    const prereqNote = checkPrerequisites(skill);
+
+    // T1.4: auto-announce destructive actions. If the skill is mining /
+    // placing / attacking / digging AND the LLM hasn't already chatted
+    // anything this turn, emit a short "about to X" so the player isn't
+    // surprised by sudden block changes. Quiet for non-destructive skills
+    // (craft_*, gather_*, find_*, learn_*, etc.) to avoid spam.
+    const announcement = destructivePreAnnounce(skill);
+    if (announcement && state.lastChatMessage === null) {
+      safeSay(bot, announcement);
+      state.lastChatMessage = announcement;
+    }
+
+    // T2.1: capture state snapshot BEFORE invocation so trials can later be
+    // conditioned on "skill X tends to work when inventory has Y."
+    const invokeArgs = args.args ?? {};
+    const stateBefore = captureSnapshot(bot);
+
+    const result = await runSkillBody(skill.code, bot, invokeArgs);
     if (result.ok) {
       skills.recordSuccess(skill.name);
       // P5: a skill that runs successfully when explicitly invoked also
       // becomes verified. (Useful for skills that needed args to test.)
       skills.markVerified(skill.name);
       state.skillLog.push({ name: skill.name, ok: true });
+      skillTrials.record({
+        skillName: skill.name,
+        ok: true,
+        durationMs: result.durationMs ?? null,
+        stateBefore,
+        args: invokeArgs,
+      });
       const valueStr = result.value === undefined ? '' : ` returned ${formatValue(result.value)}`;
-      return `invoked ${skill.name} ok in ${result.durationMs}ms${valueStr}`;
+      return `invoked ${skill.name} ok in ${result.durationMs}ms${valueStr}${prereqNote}`;
     }
     skills.recordFailure(skill.name, result.error ?? '');
     // Auto-demote: a verified skill that keeps failing is probably stale
@@ -240,10 +291,18 @@ const HANDLERS: Record<ToolName, Handler> = {
     // next searchSkill ranks alternatives ahead of it.
     const demoted = skills.demoteIfRecurrentFailures(skill.name, 2);
     state.skillLog.push({ name: skill.name, ok: false, ...(result.error ? { error: result.error } : {}) });
+    skillTrials.record({
+      skillName: skill.name,
+      ok: false,
+      durationMs: result.durationMs ?? null,
+      stateBefore,
+      args: invokeArgs,
+      error: result.error ?? 'unknown error',
+    });
     const demoteNote = demoted
       ? ` (auto-demoted to unverified after recurrent failures — consider writing a replacement under a new name)`
       : '';
-    return `failed: ${skill.name}: ${result.error ?? 'unknown error'}${demoteNote}`;
+    return `failed: ${skill.name}: ${result.error ?? 'unknown error'}${demoteNote}${prereqNote}`;
   },
 
   searchSkill: async (a, _ctx, state) => {
@@ -334,6 +393,13 @@ const HANDLERS: Record<ToolName, Handler> = {
     return hits.slice(0, 8).map((m) => m.displayName).join(', ');
   },
 
+  lookupTechTree: async (a) => {
+    const args = parseToolArgs('lookupTechTree', a);
+    const tree = getTechTree(args.item, args.maxDepth ?? 4);
+    if (!tree) return `no recipe for ${args.item} (raw / mob-derived)`;
+    return formatTechTree(tree);
+  },
+
   // --- Grounding ---
   resolveReference: async (a, ctx) => {
     const args = parseToolArgs('resolveReference', a);
@@ -380,6 +446,38 @@ const HANDLERS: Record<ToolName, Handler> = {
       .map((e) => `${e.event} at (${e.x}, ${e.y}, ${e.z}): ${e.context}`)
       .join('; ');
   },
+
+  // --- Goals (T1.1) ---
+  pushGoal: async (a) => {
+    const args = parseToolArgs('pushGoal', a);
+    const goal = goals.push(args.text, args.parentId);
+    return `pushed goal #${goal.id}: ${goal.text}${goal.parentId ? ` (sub-goal of #${goal.parentId})` : ''}`;
+  },
+  completeGoal: async (a) => {
+    const args = parseToolArgs('completeGoal', a);
+    const g = goals.complete(args.id);
+    return g ? `completed goal #${g.id}: ${g.text}` : `no active goal with id ${args.id}`;
+  },
+  cancelGoal: async (a) => {
+    const args = parseToolArgs('cancelGoal', a);
+    const g = goals.cancel(args.id);
+    return g ? `cancelled goal #${g.id}: ${g.text}` : `no active goal with id ${args.id}`;
+  },
+  listGoals: async () => {
+    return goals.renderForContext();
+  },
+
+  // --- After-action review (T2.4) ---
+  afterActionReview: async (a) => {
+    const args = parseToolArgs('afterActionReview', a);
+    const trials = skillTrials.recent(args.limit ?? 6, args.skillName);
+    if (trials.length === 0) {
+      return args.skillName
+        ? `no trials recorded for ${args.skillName}`
+        : 'no skill trials recorded yet';
+    }
+    return trials.map((t) => skillTrials.format(t)).join('\n');
+  },
 };
 
 // ============================================================================
@@ -412,6 +510,8 @@ export async function handlePlayerChat(
     skillLog: [],
     lastChatMessage: null,
     searchedQueries: new Map<string, string>(),
+    consecutiveFailures: 0,
+    depsExplainShown: false,
   };
   const trace: string[] = [];
   let lastAssistant = '';
@@ -454,6 +554,13 @@ export async function handlePlayerChat(
       const callDuration = Date.now() - callStart;
       trace.push(`${call.name}: ${shortDesc(observation)}`);
 
+      // T1.3 — DEPS Explain: track consecutive failures. Reset on any success.
+      if (observation.startsWith('failed:') || /\bfailed\b|\bcannot\b|\btimeout\b/i.test(observation)) {
+        state.consecutiveFailures += 1;
+      } else {
+        state.consecutiveFailures = 0;
+      }
+
       // Live-testing observability: per-tool-call info log + transcript line.
       const argsSummary = summarizeArgs(call.name, call.args);
       const obsSummary = shortDesc(observation);
@@ -471,6 +578,27 @@ export async function handlePlayerChat(
         durationMs: callDuration,
       });
       messages.push({ role: 'tool', content: observation } as Message);
+    }
+
+    // T1.3 — after this round-trip's tool calls, if we've crossed the failure
+    // threshold and haven't yet injected the DEPS Explain prompt this turn,
+    // inject it. The LLM sees the forcing message in the NEXT round-trip and
+    // is required to diagnose before patching further.
+    if (state.consecutiveFailures >= DEPS_EXPLAIN_THRESHOLD && !state.depsExplainShown) {
+      messages.push({
+        role: 'system',
+        content:
+          `STOP. You have hit ${state.consecutiveFailures} consecutive tool-call failures. ` +
+          `Before writing or invoking ANY new skill, do these two things in ORDER:\n` +
+          `  1) Chat the player one short sentence: what you think the SHARED root cause is.\n` +
+          `  2) Call runOnce with the SIMPLEST code that would CONFIRM that root cause ` +
+          `(e.g. inspect bot.entity.position, bot.inventory.items(), bot.findBlock(...), etc.).\n` +
+          `Only after the runOnce confirms or refutes your diagnosis may you writeSkill/invokeSkill again. ` +
+          `Brute-retrying the same broken approach is FORBIDDEN at this point.`,
+      } as Message);
+      state.depsExplainShown = true;
+      logs.plan.warn({ failures: state.consecutiveFailures }, 'DEPS Explain prompt injected');
+      appendTranscript(`[DEPS] forcing diagnose-and-probe after ${state.consecutiveFailures} consecutive failures`);
     }
   }
 
@@ -660,6 +788,11 @@ function snapshotBotState(bot: Bot): string {
     }
   })();
 
+  const env = worldEvents.recent(6);
+  const envLine = env.length === 0
+    ? 'recent_env_events: (none)'
+    : `recent_env_events:\n${indentLines(env.join('\n'), '  ')}`;
+
   return [
     `position: ${pos} ${dim}`,
     `health: ${health}  food: ${food}`,
@@ -668,6 +801,8 @@ function snapshotBotState(bot: Bot): string {
     `nearby_utility_blocks: ${utilities}`,
     `time: ${time}`,
     `recent_skill_activity: ${recentSkillLog()}`,
+    `active_goals:\n${indentLines(goals.renderForContext(), '  ')}`,
+    envLine,
   ].join('\n');
 }
 
@@ -840,6 +975,72 @@ function autoRagForSkill(name: string, code: string): string | null {
   }
 
   return null;
+}
+
+/**
+ * T1.4: pre-announce destructive actions. Returns a short sentence describing
+ * what's about to happen (e.g. "mining 1 oak_log"), or null if this skill
+ * looks non-destructive. The planner only sends this when the LLM hasn't
+ * already chatted this turn — so explicit narration from the LLM still wins.
+ *
+ * Cheap classification by name + code inspection. Errs on the side of NOT
+ * announcing (silence beats annoying the player).
+ */
+function destructivePreAnnounce(skill: Skill): string | null {
+  const lc = skill.name.toLowerCase();
+  // Mining / digging.
+  const mineMatch = lc.match(/^(?:mine|dig)_(?:one_|n_|some_|a_)?(.+?)(?:s)?$/);
+  if (mineMatch?.[1]) {
+    return `mining ${mineMatch[1].replace(/_/g, ' ')}…`;
+  }
+  // Killing / hunting / attacking mobs.
+  const killMatch = lc.match(/^(?:kill|hunt|attack|fight)_(?:one_|a_)?(.+?)(?:s)?$/);
+  if (killMatch?.[1]) {
+    return `going after the ${killMatch[1].replace(/_/g, ' ')}…`;
+  }
+  // Placing blocks.
+  const placeMatch = lc.match(/^place_(?:one_|a_)?(.+?)(?:s)?$/);
+  if (placeMatch?.[1]) {
+    return `placing ${placeMatch[1].replace(/_/g, ' ')}…`;
+  }
+  // Code-level fallback: skill name didn't match but code clearly destroys
+  // or places blocks. Keep this conservative — only fire on the obvious calls.
+  const code = skill.code;
+  if (/\bbot\.dig\s*\(/.test(code) && !/\bbot\.craft\s*\(/.test(code)) {
+    return `digging now…`;
+  }
+  if (/\bbot\.placeBlock\s*\(/.test(code)) {
+    return `placing a block…`;
+  }
+  if (/\bbot\.attack\s*\(/.test(code)) {
+    return `attacking…`;
+  }
+  return null;
+}
+
+/**
+ * T1.2: at invokeSkill time, look at the skill's declared prerequisites and
+ * report which ones are missing-from-library or still unverified. Returns
+ * an empty string when everything is fine, otherwise a "; PREREQ:" suffix
+ * that the LLM sees in the observation.
+ *
+ * Non-blocking on purpose: the LLM might override (e.g. the player provided
+ * the inputs manually). Surfacing the signal beats forcing a chain.
+ */
+function checkPrerequisites(skill: Skill): string {
+  if (skill.prerequisites.length === 0) return '';
+  const missing: string[] = [];
+  const unverified: string[] = [];
+  for (const name of skill.prerequisites) {
+    const dep = skills.get(name);
+    if (!dep) missing.push(name);
+    else if (!dep.verified) unverified.push(name);
+  }
+  if (missing.length === 0 && unverified.length === 0) return '';
+  const parts: string[] = [];
+  if (missing.length > 0) parts.push(`missing=${missing.join(',')}`);
+  if (unverified.length > 0) parts.push(`unverified=${unverified.join(',')}`);
+  return `; PREREQ_WARNING(${parts.join(' ')}) — consider running these prerequisite skills first, or writeSkill replacements before invoking this one again`;
 }
 
 function inferItemFromCode(code: string): string | null {

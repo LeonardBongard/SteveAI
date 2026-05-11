@@ -22,6 +22,7 @@ import { openMemoryStore, closeMemoryStore } from './memory/store.js';
 import { loadKnowledge } from './knowledge/index.js';
 import { handlePlayerChat } from './planner.js';
 import { startSession } from './observability.js';
+import { worldEvents } from './memory/events.js';
 
 // --- Config ---
 
@@ -71,6 +72,7 @@ async function main(): Promise<void> {
 
   bot.once('spawn', () => {
     bot.pathfinder.setMovements(new Movements(bot));
+    worldEvents.attach(bot);
     logs.bot.info(
       {
         host: MC_HOST,
