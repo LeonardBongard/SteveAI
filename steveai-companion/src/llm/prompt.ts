@@ -28,9 +28,12 @@ I/O:
 
 Skill execution / management:
 - searchSkill(query, k?): find existing skills matching a description.
-- writeSkill(name, description, code): save a new skill (executable JS).
+- writeSkill(name, description, code): save executable JS. Auto-syntax-checked
+  and auto-tested on save; unknown registry names (e.g. wrong item names) are
+  blocked with a suggestion.
 - invokeSkill(name, args?): run a saved skill.
-- runOnce(code): execute one-shot code without saving (exploration only).
+- runOnce(code): execute code once without saving. Use for state probes
+  ("is there a crafting_table nearby?") and quick checks.
 - listSkills(limit?): list what's already in the library.
 
 Minecraft knowledge (the RAG — use BEFORE you write a skill):

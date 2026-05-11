@@ -17,6 +17,19 @@ const { goals, Movements } = pathfinderPkg;
 import { logs } from '../log.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const LOOP_TIMEOUT_MS = 120_000;
+
+/**
+ * Choose the timeout for a skill body. Loop-style skills (containing `while`
+ * or `for` AND at least one async bot operation) get a much longer budget —
+ * the original 30s wasn't enough for "mine 8 oak logs in a sparse forest"
+ * which hit timeout on every variant. Single-shot skills stick to 30s.
+ */
+function pickTimeout(code: string): number {
+  const hasLoop = /\b(while|for)\s*\(/.test(code);
+  const hasAsyncBot = /\bawait\s+bot\.(dig|placeBlock|equip|attack|craft|lookAt|useOn|activateBlock|pathfinder\.goto)/.test(code);
+  return hasLoop && hasAsyncBot ? LOOP_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+}
 
 export interface RunSkillResult {
   ok: boolean;
@@ -39,9 +52,10 @@ export async function runSkillBody(
   code: string,
   bot: Bot,
   args: unknown = {},
-  timeoutMs = DEFAULT_TIMEOUT_MS
+  timeoutMs?: number
 ): Promise<RunSkillResult> {
   const start = Date.now();
+  const effectiveTimeout = timeoutMs ?? pickTimeout(code);
 
   // Pre-loaded helpers in scope. `console` is mapped to pino with a [SKILL] tag
   // so any `console.log` inside skill code lands somewhere visible.
@@ -73,8 +87,8 @@ export async function runSkillBody(
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`skill timed out after ${timeoutMs}ms`)),
-      timeoutMs
+      () => reject(new Error(`skill timed out after ${effectiveTimeout}ms`)),
+      effectiveTimeout
     );
   });
 
@@ -163,7 +177,7 @@ export function decorateError(message: string, code: string): string {
 export async function runOnceCode(
   code: string,
   bot: Bot,
-  timeoutMs = DEFAULT_TIMEOUT_MS
+  timeoutMs?: number
 ): Promise<RunSkillResult> {
   return runSkillBody(code, bot, {}, timeoutMs);
 }

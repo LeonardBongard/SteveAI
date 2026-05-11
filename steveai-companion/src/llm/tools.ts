@@ -23,9 +23,9 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 
 const chatSchema = z
   .object({
-    message: z.string().min(1).max(256),
+    message: z.string().min(1).max(1024),
   })
-  .describe('Send a chat message visible to the player. Keep it short.');
+  .describe('Send a chat message visible to the player. Keep it short — a sentence or two. The underlying Mineflayer safeSay splits at 240-char boundaries, so long messages render as multiple lines in-game.');
 
 // ============================================================================
 // Skill execution / management — the v2 core

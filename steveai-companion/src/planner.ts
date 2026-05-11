@@ -99,6 +99,10 @@ interface PlannerState {
   /** P4: last chat message sent this turn. Dedup against this to stop
    *  the LLM from repeating itself 3× when it loses track of completion. */
   lastChatMessage: string | null;
+  /** Per-turn searchSkill query → result cache. Repeated identical searches
+   *  produce a strong "you already searched for this" observation rather than
+   *  another round-trip to the embedding DB. */
+  searchedQueries: Map<string, string>;
 }
 
 const HANDLERS: Record<ToolName, Handler> = {
@@ -163,6 +167,12 @@ const HANDLERS: Record<ToolName, Handler> = {
       return `failed: writeSkill: ${cleanErrorMessage(err)}`;
     }
 
+    // Auto-RAG on write: when the LLM names a skill craft_X / kill_X / hunt_X
+    // we look up the relevant knowledge and inject it into the save observation.
+    // Cheaper than enforcing "you MUST call lookupRecipe first" and just as
+    // grounding — the LLM sees the right info whether it asked or not.
+    const ragHint = autoRagForSkill(args.name, args.code);
+
     // P2: auto-test the new skill once. The LLM will write skills with
     // empty-args contracts most of the time; arg-required skills can still
     // be invoked with args afterward. Auto-test result becomes part of the
@@ -173,6 +183,7 @@ const HANDLERS: Record<ToolName, Handler> = {
     const testArgs = buildAutoTestArgs(args.code, ctx.speakerName);
     const testResult = await runSkillBody(args.code, bot, testArgs);
     const warnsTxt = warnings.length > 0 ? ` warnings: ${warnings.join(' | ')};` : '';
+    const ragTxt = ragHint ? ` AUTO-RAG: ${ragHint};` : '';
     if (testResult.ok) {
       skills.markVerified(saved.name);
       skills.recordSuccess(saved.name);
@@ -188,7 +199,7 @@ const HANDLERS: Record<ToolName, Handler> = {
       appendTranscript(
         `[skill] ${saved.name}: WRITTEN + VERIFIED in ${testResult.durationMs}ms\n  desc: ${args.description}\n  file: ${filePath}\n  code:\n${indentLines(args.code, '    ')}`
       );
-      return `saved + test-invoked "${saved.name}" successfully in ${testResult.durationMs}ms.${warnsTxt} Marked verified.`;
+      return `saved + test-invoked "${saved.name}" successfully in ${testResult.durationMs}ms.${warnsTxt}${ragTxt} Marked verified.`;
     }
     skills.recordFailure(saved.name, testResult.error ?? '');
     const filePath = dumpSkillToDisk({
@@ -206,7 +217,7 @@ const HANDLERS: Record<ToolName, Handler> = {
     appendTranscript(
       `[skill] ${saved.name}: WRITTEN but auto-test failed: ${testResult.error}\n  file: ${filePath}\n  code:\n${indentLines(args.code, '    ')}`
     );
-    return `saved "${saved.name}" but auto-test failed: ${testResult.error ?? 'unknown error'}.${warnsTxt} The skill is unverified — patch it (writeSkill same name) and try again.`;
+    return `saved "${saved.name}" but auto-test failed: ${testResult.error ?? 'unknown error'}.${warnsTxt}${ragTxt} The skill is unverified — patch it (writeSkill same name) and try again.`;
   },
 
   invokeSkill: async (a, { bot }, state) => {
@@ -235,15 +246,25 @@ const HANDLERS: Record<ToolName, Handler> = {
     return `failed: ${skill.name}: ${result.error ?? 'unknown error'}${demoteNote}`;
   },
 
-  searchSkill: async (a) => {
+  searchSkill: async (a, _ctx, state) => {
     const args = parseToolArgs('searchSkill', a);
+    const cacheKey = args.query.toLowerCase().trim();
+    const cached = state.searchedQueries.get(cacheKey);
+    if (cached !== undefined) {
+      return `(you already searched for "${args.query}" this turn — same result will come back) ${cached}`;
+    }
     const hits = await skills.search(args.query, args.k ?? 4);
-    if (hits.length === 0) return 'no matching skills in library';
-    return hits
-      .map((h) =>
-        `${h.name} [${h.verified ? 'verified' : 'unverified'}] (✓${h.successCount}/✗${h.failureCount}): ${h.description}`
-      )
-      .join('; ');
+    const result =
+      hits.length === 0
+        ? 'no matching skills in library'
+        : hits
+            .map(
+              (h) =>
+                `${h.name} [${h.verified ? 'verified' : 'unverified'}] (✓${h.successCount}/✗${h.failureCount}): ${h.description}`
+            )
+            .join('; ');
+    state.searchedQueries.set(cacheKey, result);
+    return result;
   },
 
   runOnce: async (a, { bot }) => {
@@ -386,7 +407,12 @@ export async function handlePlayerChat(
   const messages = buildContext({ window, pinned, similar, botState });
 
   const ctx: PlannerCtx = { bot, speakerName };
-  const state: PlannerState = { capturedThisTurn: false, skillLog: [], lastChatMessage: null };
+  const state: PlannerState = {
+    capturedThisTurn: false,
+    skillLog: [],
+    lastChatMessage: null,
+    searchedQueries: new Map<string, string>(),
+  };
   const trace: string[] = [];
   let lastAssistant = '';
   let stepIdx = 0;
@@ -455,6 +481,25 @@ export async function handlePlayerChat(
 
   if (lastAssistant) {
     await conversation.recordTurn('steve', lastAssistant);
+  }
+
+  // #4: if the turn produced no player-facing chat AND something failed,
+  // emit a default fallback message. Player should never be left wondering
+  // what Steve did or didn't do.
+  if (state.lastChatMessage === null) {
+    const failed = state.skillLog.filter((s) => !s.ok);
+    if (failed.length > 0 || stepIdx >= MAX_TOOL_STEPS_PER_INTENT) {
+      const what = failed[0]?.name ?? 'that';
+      const reason = failed[0]?.error ?? 'I hit a problem';
+      const fallback =
+        failed.length > 0
+          ? `I tried ${what} but it failed (${truncate(reason, 80)}). Want me to try a different approach?`
+          : `I worked on that but couldn't finish in the step budget. Want me to continue or try a different angle?`;
+      bot.chat(truncateForChat(fallback));
+      state.lastChatMessage = fallback;
+      trace.push(`auto-chat (fallback): ${shortDesc(fallback)}`);
+      appendTranscript(`[fallback chat] ${fallback}`);
+    }
   }
 
   logs.plan.info(
@@ -542,6 +587,23 @@ const UTILITY_BLOCKS = [
   'bed',
 ];
 
+/** Most-recently invoked skills, for per-turn injection (#7). */
+function recentSkillLog(): string {
+  const list = skills.list(8);
+  if (list.length === 0) return 'no recent skill activity';
+  // Filter to skills with last_invoked_at within the last hour.
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  const recent = list.filter((s) => {
+    if (!s.lastInvokedAt) return false;
+    return new Date(s.lastInvokedAt).getTime() > cutoff;
+  });
+  if (recent.length === 0) return 'no recent skill activity';
+  return recent
+    .slice(0, 5)
+    .map((s) => `${s.name} ${s.verified ? '(v)' : '(?)'} ✓${s.successCount}/✗${s.failureCount}`)
+    .join(', ');
+}
+
 function snapshotBotState(bot: Bot): string {
   const p = bot.entity?.position;
   const pos = p ? `(${rnd(p.x)}, ${rnd(p.y)}, ${rnd(p.z)})` : '(unknown)';
@@ -605,6 +667,7 @@ function snapshotBotState(bot: Bot): string {
     `nearby_entities: ${nearbyEntities}`,
     `nearby_utility_blocks: ${utilities}`,
     `time: ${time}`,
+    `recent_skill_activity: ${recentSkillLog()}`,
   ].join('\n');
 }
 
@@ -718,6 +781,71 @@ function buildAutoTestArgs(code: string, speakerName: string): Record<string, un
     out[ref] = defaultArgValue(ref, speakerName);
   }
   return out;
+}
+
+/**
+ * #1 auto-RAG: when a skill name (or code) suggests crafting / killing /
+ * mining a specific thing, inject the corresponding ground-truth into the
+ * writeSkill observation so the LLM sees authoritative data even if it
+ * forgot to call lookupRecipe / lookupMob first. Cheaper than enforcing
+ * "you MUST call lookupRecipe" and just as effective.
+ *
+ * Returns null if no auto-RAG signal applies.
+ */
+function autoRagForSkill(name: string, code: string): string | null {
+  const lc = name.toLowerCase();
+
+  // craft_<item> or any code that calls bot.craft / bot.recipesFor
+  const craftMatch = lc.match(/^craft_(.+)$/) ?? null;
+  const targetItem = craftMatch?.[1];
+  if (targetItem || /\bbot\.(craft|recipesFor)\s*\(/.test(code)) {
+    const item = targetItem ?? inferItemFromCode(code);
+    if (item) {
+      const recipes = lookupRecipe(item);
+      if (recipes.length > 0) {
+        const r = recipes[0];
+        if (r) {
+          const ings = r.ingredients.map((i) => `${i.count}x ${i.name}`).join(' + ');
+          const station = r.inventoryCraftable
+            ? 'inventory 2x2 OR crafting_table'
+            : 'crafting_table needed';
+          return `recipe(${item}) = ${ings} [${station}]`;
+        }
+      }
+    }
+  }
+
+  // kill_<mob> / hunt_<mob> / fight_<mob>
+  const mobMatch = lc.match(/^(?:kill|hunt|fight|attack)_(.+)$/) ?? null;
+  if (mobMatch?.[1]) {
+    const mob = lookupMob(mobMatch[1]);
+    if (mob && mob.drops.length > 0) {
+      const drops = mob.drops
+        .slice(0, 5)
+        .map((d) => `${d.item} ×${d.countRange[0]}-${d.countRange[1]}`)
+        .join(', ');
+      return `${mob.displayName}: drops ${drops}`;
+    }
+  }
+
+  // mine_<block> — block harvest info
+  const mineMatch = lc.match(/^mine_(?:one_|n_|some_)?(.+?)(?:s)?$/) ?? null;
+  if (mineMatch?.[1]) {
+    const blockName = mineMatch[1];
+    const block = lookupBlock(blockName);
+    if (block) {
+      const tools = block.harvestTools.length > 0 ? `harvest with: ${block.harvestTools.join('/')}` : 'no tool required';
+      return `${blockName}: ${tools}`;
+    }
+  }
+
+  return null;
+}
+
+function inferItemFromCode(code: string): string | null {
+  // Look for `itemsByName.NAME` or `'recipesFor("NAME"` patterns.
+  const m = /itemsByName\.([A-Za-z_]\w*)/.exec(code);
+  return m?.[1] ?? null;
 }
 
 function defaultArgValue(name: string, speakerName: string): unknown {

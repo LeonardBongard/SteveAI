@@ -145,6 +145,11 @@ export class SkillLibrary {
    * Vector retrieval over description embedding. Verified skills first, then
    * unverified, both ordered by similarity. The LLM is told to prefer
    * verified hits in the prompt.
+   *
+   * Dedup-by-cluster (#6): when multiple skills share the same name prefix
+   * (e.g. place_crafting_table_nearby / _below / _in_front), only the
+   * highest-scoring variant in each cluster is returned. Stops the LLM
+   * from being offered three near-equivalents that differ only by suffix.
    */
   async search(query: string, k = 4): Promise<Skill[]> {
     let queryVec: number[];
@@ -156,6 +161,8 @@ export class SkillLibrary {
     }
     const queryBlob = encodeEmbedding(queryVec);
 
+    // Over-fetch so the cluster dedup has options to pick from.
+    const overFetch = Math.max(k * 3, 12);
     const rows = getDb()
       .prepare<[Buffer, number], SkillRow>(
         `SELECT id, ts, name, description, code, success_count, failure_count, last_invoked_at, verified, consecutive_failures
@@ -164,9 +171,9 @@ export class SkillLibrary {
          ORDER BY verified DESC, vec_distance_cosine(embedding, ?) ASC
          LIMIT ?`
       )
-      .all(queryBlob, k);
+      .all(queryBlob, overFetch);
 
-    return rows.map(rowToSkill);
+    return clusterDedup(rows.map(rowToSkill)).slice(0, k);
   }
 
   /** Track success after a successful invocation. Resets consecutive_failures. */
@@ -251,6 +258,29 @@ export class SkillLibrary {
       .prepare<[Buffer, number]>('UPDATE skills SET embedding = ? WHERE id = ?')
       .run(blob, id);
   }
+}
+
+/**
+ * Cluster skills by name prefix. Two skills are "siblings" if they share
+ * the first 3 underscore-separated tokens (e.g. place_crafting_table_*).
+ * Within each cluster keep the variant with the best score, where:
+ *   score = (success_count - failure_count) + 1000 * (verified ? 1 : 0)
+ * so verified-with-positive-net always beats unverified.
+ */
+function clusterDedup(skills: Skill[]): Skill[] {
+  const clusters = new Map<string, Skill>();
+  for (const s of skills) {
+    const tokens = s.name.split('_').slice(0, 3).join('_');
+    const existing = clusters.get(tokens);
+    if (!existing || scoreOf(s) > scoreOf(existing)) {
+      clusters.set(tokens, s);
+    }
+  }
+  return [...clusters.values()];
+}
+
+function scoreOf(s: Skill): number {
+  return (s.successCount - s.failureCount) + (s.verified ? 1000 : 0);
 }
 
 function sanitizeName(raw: string): string {
