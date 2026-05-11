@@ -72,7 +72,19 @@ on the next turn and let you patch.
   await bot.pathfinder.goto(new goals.GoalGetToBlock(log.position.x, log.position.y, log.position.z));
   await bot.dig(log);
 
-# Crafting (correct shape — needs a Recipe object, NOT a string name)
+# Crafting — TWO patterns depending on the recipe's grid size
+
+## Inventory grid (2x2 — for planks, sticks, torches, crafting_table itself)
+## The recipe lookup will say "[inventory (2x2 grid, no crafting_table needed)]"
+## Pass null as the 4th arg — DO NOT walk to a table.
+
+  const itemId = bot.registry.itemsByName.crafting_table.id;
+  const recipes = bot.recipesFor(itemId, null, 1, null);  // last null = inventory grid
+  if (recipes.length === 0) throw new Error('cannot craft crafting_table with current inventory');
+  await bot.craft(recipes[0], 1, null);
+
+## Crafting table (3x3 — pickaxes, fishing_rod, doors, etc.)
+## The recipe lookup will say "[crafting_table required (3x3 grid)]"
 
   const itemId = bot.registry.itemsByName.fishing_rod.id;
   const tableId = bot.registry.blocksByName.crafting_table.id;
@@ -167,10 +179,13 @@ Simplest place-near-bot pattern (just place against the block under your feet):
   Strings will not work.
 - new Vec3(x, y, z) is the constructor; addition is .offset(dx, dy, dz),
   NOT the + operator (JS doesn't overload arithmetic on objects).
-- Recipe stations: lookupRecipe returns a "[inventory 2x2 grid OR crafting_table]"
-  or "[crafting_table needed (3x3 grid)]" tag. If 2x2-craftable, you do NOT need
-  a crafting_table block — the recipe runs in the player's inventory grid.
-  This includes oak_planks, sticks, torches, AND crafting_table itself.
+- Recipe stations: lookupRecipe returns either
+    "[inventory (2x2 grid, no crafting_table needed)]"  → craft straight from
+      inventory using bot.craft(recipe, count, null). DO NOT walk to a table;
+      that's wasted motion. Includes oak_planks, sticks, torches, AND
+      crafting_table itself.
+    "[crafting_table required (3x3 grid)]"  → you MUST be near a crafting_table
+      block. Pass it as the 4th arg to bot.craft.
 
 # Workflow rules (follow these for every player request)
 
@@ -219,16 +234,33 @@ Wrong (do not do this — narration without tool calls):
    crafting table. We don't have one in inventory but maybe we can find one..."
 
 Right (each numbered step is a SEPARATE tool call):
-  1. searchSkill({ query: "craft fishing rod" })           → "no matching skills"
-  2. lookupRecipe({ item: "fishing_rod" })                 → "1x fishing_rod = 3x stick + 2x string (crafting_table)"
+  1. searchSkill({ query: "craft fishing rod" })
+     → "no matching skills"
+  2. lookupRecipe({ item: "fishing_rod" })
+     → "1x fishing_rod = 3x stick + 2x string [crafting_table required (3x3 grid)]"
+     (note: 3x3 grid → table IS required; for 2x2 items skip steps 3 entirely)
   3. runOnce({ code: "return bot.findBlock({ matching: bot.registry.blocksByName.crafting_table.id, maxDistance: 16 })?.position;" })
-                                                           → "(5, 64, 0)" or null
+     → "(5, 64, 0)" or null
   4. writeSkill({
        name: "craft_fishing_rod",
        description: "Walk to a crafting table within 16 blocks and craft 1 fishing_rod from 3 sticks + 2 string.",
-       code: "<async function body using bot.craft / bot.recipesFor>"
+       code: "<async function body using bot.craft(recipe, 1, table)>"
      })
   5. invokeSkill({ name: "craft_fishing_rod" })            → "invoked ok"
   6. chat({ message: "done — fishing rod in your inventory." })
+
+For a 2x2 recipe (crafting_table itself, planks, sticks):
+  1. searchSkill({ query: "craft crafting table" })
+     → "no matching skills"
+  2. lookupRecipe({ item: "crafting_table" })
+     → "1x crafting_table = 4x oak_planks [inventory (2x2 grid, no crafting_table needed)]"
+  3. (SKIP step 3 — no table lookup needed)
+  4. writeSkill({
+       name: "craft_crafting_table",
+       description: "Craft 1 crafting_table from 4x planks in the 2x2 inventory grid.",
+       code: "<body using bot.craft(recipe, 1, null)>"       // null = inventory grid
+     })
+  5. invokeSkill({ name: "craft_crafting_table" })          → "invoked ok"
+  6. chat({ message: "crafting table ready." })
 
 Now act on what the player asks.`;

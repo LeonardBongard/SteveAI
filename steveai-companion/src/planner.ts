@@ -807,8 +807,8 @@ function autoRagForSkill(name: string, code: string): string | null {
         if (r) {
           const ings = r.ingredients.map((i) => `${i.count}x ${i.name}`).join(' + ');
           const station = r.inventoryCraftable
-            ? 'inventory 2x2 OR crafting_table'
-            : 'crafting_table needed';
+            ? 'inventory (2x2, no crafting_table needed)'
+            : 'crafting_table required';
           return `recipe(${item}) = ${ings} [${station}]`;
         }
       }
@@ -900,12 +900,12 @@ function formatRecipe(r: {
   inventoryCraftable?: boolean;
 }): string {
   const ings = r.ingredients.map((i) => `${i.count}x ${i.name}`).join(' + ');
-  // P0: tell the LLM where the recipe is craftable. The 'inventory' label is
-  // critical for items like crafting_table itself, oak_planks, sticks, etc.
-  // that don't actually need a table.
+  // P0: tell the LLM the simplest path to craft this. For 2x2-fits items
+  // (including crafting_table itself) ONLY mention inventory — don't muddy
+  // the signal by listing crafting_table as an alternative.
   const stationNote = r.inventoryCraftable
-    ? 'inventory 2x2 grid OR crafting_table'
-    : 'crafting_table needed (3x3 grid)';
+    ? 'inventory (2x2 grid, no crafting_table needed)'
+    : 'crafting_table required (3x3 grid)';
   return `${r.result.count}x ${r.result.name} = ${ings} [${stationNote}]`;
 }
 
